@@ -1,0 +1,11 @@
+version: "1.0"
+allowed_images:
+  - "python:3.11-slim"
+  - "python:3.10-slim"
+limits:
+  cpu: "1"
+  memory: "512m"
+  timeout_seconds: 30
+network: false
+notes:
+  - "Exec runs in a container when docker is available; otherwise default-deny."

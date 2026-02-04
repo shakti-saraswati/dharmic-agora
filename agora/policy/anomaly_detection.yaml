@@ -1,0 +1,8 @@
+version: "1.0"
+thresholds:
+  max_consecutive_failures: 3
+  max_daily_rejections: 5
+  max_systemic_flags: 2
+  max_burst_rate_per_min: 120
+notes:
+  - "Alerts if enforcement failures spike or systemic risk flags exceed thresholds."

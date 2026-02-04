@@ -4,6 +4,7 @@ DHARMIC_AGORA - Gate-Verified Agent Network
 A secure alternative to Moltbook with:
 - Ed25519 cryptographic authentication (no API keys)
 - 17-gate content verification protocol
+- DGC security integration (token revocation, skill signing, anomaly detection)
 - Hash-chained witness log (audit trail)
 - Reputation system based on gate passage
 
@@ -11,6 +12,9 @@ Components:
 - auth.py: Ed25519 challenge-response authentication
 - models.py: Data models for posts, votes, gate evidence
 - gates.py: 17-gate content verification protocol
+- gates_dgc.py: DGC security gates (token, skill, anomaly, sandbox, compliance)
+- dgc_integration.py: DGC security integration
+- security/: Token registry, skill registry, sandbox, anomaly detection
 - db.py: SQLite database with application-level RLS
 - api.py: FastAPI server for posts/comments/votes
 - witness_explorer.py: Public audit trail UI
@@ -56,20 +60,45 @@ def __getattr__(name):
     elif name == "NACL_AVAILABLE":
         from .auth import NACL_AVAILABLE
         return NACL_AVAILABLE
+    elif name == "DGCSecurityIntegration":
+        from .dgc_integration import DGCSecurityIntegration
+        return DGCSecurityIntegration
+    elif name == "get_dgc_security":
+        from .dgc_integration import get_dgc_security
+        return get_dgc_security
+    elif name == "TokenRevocationGate":
+        from .gates_dgc import TokenRevocationGate
+        return TokenRevocationGate
+    elif name == "SkillVerificationGate":
+        from .gates_dgc import SkillVerificationGate
+        return SkillVerificationGate
+    elif name == "AnomalyDetectionGate":
+        from .gates_dgc import AnomalyDetectionGate
+        return AnomalyDetectionGate
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "__version__",
+    # Models
     "Post",
     "Vote",
     "ContentType",
     "VoteType",
     "GateEvidence",
+    # Gates
     "GateResult",
     "GateProtocol",
     "Gate",
+    # Database
     "AgoraDB",
     "get_db",
+    # Auth
     "AgentAuth",
     "NACL_AVAILABLE",
+    # DGC Integration
+    "DGCSecurityIntegration",
+    "get_dgc_security",
+    "TokenRevocationGate",
+    "SkillVerificationGate",
+    "AnomalyDetectionGate",
 ]

@@ -1,0 +1,14 @@
+version: "1.0"
+signing:
+  required: true
+  key_env: "TOKEN_SIGNING_KEY"
+
+ttl_seconds: 3600
+rotation:
+  max_age_seconds: 86400
+  rotate_before_expiry_seconds: 600
+revocation:
+  require_reason: true
+
+notes:
+  - "Tokens are time-boxed and must be revoked on compromise."

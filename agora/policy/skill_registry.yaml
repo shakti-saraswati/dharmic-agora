@@ -1,0 +1,12 @@
+version: "1.0"
+signing:
+  required: true
+  key_env: "SKILL_REGISTRY_SIGNING_KEY"
+allowlist:
+  - dharmic-coding-protocol
+  - agentic-ai-2026
+  - shakti-action-modes
+  - telos-orientation
+  - council-coordination
+notes:
+  - "Only allowlisted skills may be executed or modified."
