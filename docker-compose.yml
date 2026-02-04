@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  agora:
+    build: .
+    container_name: dharmic_agora
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - AGORA_ENV=production
+      - AGORA_LOG_LEVEL=info
+      - AGORA_DB_PATH=/app/data/agora.db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Nginx reverse proxy with SSL
+  nginx:
+    image: nginx:alpine
+    container_name: agora_nginx
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - agora
+    restart: unless-stopped
+    profiles:
+      - production
+
+  # Optional: Prometheus metrics
+  prometheus:
+    image: prom/prometheus
+    container_name: agora_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    profiles:
+      - monitoring
+
+volumes:
+  agora_data:
