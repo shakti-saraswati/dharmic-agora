@@ -8,7 +8,7 @@ from agora.gate_eval import load_fixtures, evaluate, FIXTURES_PATH
 class TestLoadFixtures:
     def test_load_default_fixtures(self):
         fixtures = load_fixtures()
-        assert len(fixtures) == 20
+        assert len(fixtures) == 30
         for f in fixtures:
             assert "content" in f
             assert "expected_label" in f
@@ -30,8 +30,8 @@ class TestLoadFixtures:
         fixtures = load_fixtures()
         genuine = [f for f in fixtures if f["expected_label"] == "genuine"]
         performative = [f for f in fixtures if f["expected_label"] == "performative"]
-        assert len(genuine) == 10
-        assert len(performative) == 10
+        assert len(genuine) == 15
+        assert len(performative) == 15
 
 
 class TestEvaluate:
@@ -42,7 +42,7 @@ class TestEvaluate:
         assert "avg_genuine_composite" in report
         assert "avg_performative_composite" in report
         assert "genuine_beats_performative" in report
-        assert report["total_fixtures"] == 20
+        assert report["total_fixtures"] == 30
 
     def test_genuine_beats_performative(self):
         """The core validation: genuine content should score higher."""
@@ -61,12 +61,12 @@ class TestEvaluate:
             assert "fn" in metrics
             assert "precision" in metrics
             assert "recall" in metrics
-            assert metrics["tp"] + metrics["fp"] + metrics["tn"] + metrics["fn"] == 20
+            assert metrics["tp"] + metrics["fp"] + metrics["tn"] + metrics["fn"] == 30
 
     def test_results_per_fixture(self):
         fixtures = load_fixtures()
         report = evaluate(fixtures)
-        assert len(report["results"]) == 20
+        assert len(report["results"]) == 30
         for r in report["results"]:
             assert "expected" in r
             assert "admitted" in r

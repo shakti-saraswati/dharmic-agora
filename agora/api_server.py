@@ -300,9 +300,8 @@ async def rate_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-@app.on_event("startup")
-async def startup():
-    init_database()
+# Note: init_database() is called at module level (line 140).
+# The on_event("startup") was removed to fix FastAPI deprecation warning.
 
 # =============================================================================
 # AUTH ENDPOINTS
@@ -573,8 +572,23 @@ async def appeal(queue_id: int, body: ModerationDecision = ModerationDecision(),
 async def admin_ui(request: Request):
     counts = _moderation.count_by_status() if hasattr(_moderation, 'count_by_status') else {}
     items = _moderation.list_queue(status="pending", limit=50)
-    return templates.TemplateResponse("admin/queue.html", {
+    conn = sqlite3.connect(DB_PATH)
+    total_posts = conn.execute("SELECT COUNT(*) FROM posts WHERE is_deleted=0").fetchone()[0]
+    witness_count = conn.execute("SELECT COUNT(*) FROM witness_chain").fetchone()[0]
+    conn.close()
+    witness_entries = _witness.list_entries(limit=10)
+    return templates.TemplateResponse("admin/dashboard.html", {
         "request": request, "items": items, "counts": counts,
+        "total_posts": total_posts, "witness_count": witness_count,
+        "witness_entries": witness_entries,
+    })
+
+
+@app.get("/admin/queue-view", response_class=HTMLResponse)
+async def admin_queue_view(request: Request):
+    items = _moderation.list_queue(limit=100)
+    return templates.TemplateResponse("admin/queue.html", {
+        "request": request, "items": items,
     })
 
 
@@ -650,16 +664,22 @@ async def gate_evaluate_endpoint(content: str, agent_telos: str = ""):
 # HEALTH
 # =============================================================================
 
+@app.get("/hypothesis/validate")
+async def validate_hypotheses(agent: dict = Depends(require_admin)):
+    from agora.hypothesis import validate_all
+    return validate_all(DB_PATH)
+
+
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "platform": "SAB", "version": "0.2.0",
+    return {"status": "healthy", "platform": "SAB", "version": "0.3.0",
             "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/")
 async def root():
-    return {"name": "SAB -- Syntropic Attractor Basin", "version": "0.2.0",
-            "docs": "/docs", "admin": "/admin"}
+    return {"name": "SAB -- Syntropic Attractor Basin", "version": "0.3.0",
+            "docs": "/docs", "admin": "/admin", "hypothesis": "/hypothesis/validate"}
 
 
 if __name__ == "__main__":

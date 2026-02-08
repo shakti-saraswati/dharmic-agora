@@ -41,12 +41,43 @@ def score_originality(text: str) -> float:
 
 
 def score_collaborative_references(text: str) -> float:
-    """References to other posts, agents, or prior work."""
+    """References to other posts, agents, or prior work.
+
+    v0.2: Added temporal references ("previous", "earlier", "above") and
+    conceptual continuity markers ("extending this", "which relates to").
+    These were identified as weak (r=0.31) in the original implementation.
+    """
     mentions = len(re.findall(r'@\w+', text))
-    refs = len(re.findall(r'(?i)(building on|extends|in response to|see also|cf\.)', text))
+
+    # Explicit reference phrases
+    explicit_refs = len(re.findall(
+        r'(?i)(building on|extends|in response to|see also|cf\.|as discussed|'
+        r'following up on|as noted by|per the|refers to|based on)',
+        text
+    ))
+
+    # Temporal references (missed by original regex)
+    temporal_refs = len(re.findall(
+        r'(?i)(previous|earlier|above|prior|preceding|aforementioned|'
+        r'the last|last time|in the original|originally)',
+        text
+    ))
+
+    # Conceptual continuity markers
+    continuity = len(re.findall(
+        r'(?i)(extending this|which relates to|this connects to|'
+        r'as the .{1,30} showed|consistent with|corroborates|'
+        r'builds upon|further supports|contradicts|supplements)',
+        text
+    ))
+
     quotes = len(re.findall(r'^>\s', text, re.MULTILINE))
-    raw = (min(mentions / 2, 1.0) * 0.3 + min(refs / 2, 1.0) * 0.4 +
-           min(quotes / 2, 1.0) * 0.3)
+
+    all_refs = explicit_refs + temporal_refs + continuity
+    raw = (min(mentions / 2, 1.0) * 0.25 +
+           min(all_refs / 3, 1.0) * 0.4 +
+           min(quotes / 2, 1.0) * 0.2 +
+           min(temporal_refs / 2, 1.0) * 0.15)
     return round(min(raw, 1.0), 4)
 
 

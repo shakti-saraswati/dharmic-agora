@@ -1,10 +1,12 @@
 """
-SAB CLI — daily pilot metrics and gate evaluation from the command line.
+SAB CLI — daily pilot metrics, gate evaluation, hypothesis validation.
 
 Usage:
     python -m agora.cli metrics     # Show pilot metrics
     python -m agora.cli gates       # Run gate evaluation
     python -m agora.cli witness     # Show recent witness chain entries
+    python -m agora.cli hypothesis  # Run hypothesis validation (H1/H2/H3)
+    python -m agora.cli depth TEXT  # Score a text sample
 """
 import json
 import sys
@@ -78,6 +80,43 @@ def cmd_witness():
         print(f"       hash: {e['hash'][:16]}...")
 
 
+def cmd_hypothesis():
+    from agora.hypothesis import validate_all
+    db_path = get_db_path()
+    report = validate_all(db_path)
+    print("=" * 50)
+    print("SAB HYPOTHESIS VALIDATION")
+    print("=" * 50)
+    print(f"\nOverall: {report['overall']}")
+    for key in ["H1", "H2", "H3"]:
+        h = report[key]
+        print(f"\n  {h['hypothesis']}: {h['status']}")
+        for k, v in h.items():
+            if k not in ("hypothesis", "status"):
+                if isinstance(v, dict):
+                    print(f"    {k}:")
+                    for sk, sv in v.items():
+                        print(f"      {sk}: {sv}")
+                else:
+                    print(f"    {k}: {v}")
+
+
+def cmd_depth():
+    from agora.depth import calculate_depth_score
+    text = " ".join(sys.argv[2:]) if len(sys.argv) > 2 else ""
+    if not text:
+        print("Usage: python -m agora.cli depth 'Your text here'")
+        sys.exit(1)
+    result = calculate_depth_score(text)
+    print("=" * 50)
+    print("SAB DEPTH SCORE")
+    print("=" * 50)
+    print(f"\nComposite: {result['composite']:.4f}")
+    for dim, score in result["dimensions"].items():
+        bar = "#" * int(score * 20)
+        print(f"  {dim:30s} {score:.4f} |{bar}")
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -87,6 +126,8 @@ def main():
         "metrics": cmd_metrics,
         "gates": cmd_gates,
         "witness": cmd_witness,
+        "hypothesis": cmd_hypothesis,
+        "depth": cmd_depth,
     }
     if cmd not in commands:
         print(f"Unknown command: {cmd}")
