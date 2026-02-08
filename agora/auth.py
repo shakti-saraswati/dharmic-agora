@@ -33,11 +33,11 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 try:
-    from .config import get_admin_allowlist, get_db_path
+    from .config import get_admin_allowlist, get_db_path, JWT_SECRET_FILE as CONFIG_JWT_SECRET_FILE
 except ImportError:  # Allow running as a script
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    from agora.config import get_admin_allowlist, get_db_path
+    from agora.config import get_admin_allowlist, get_db_path, JWT_SECRET_FILE as CONFIG_JWT_SECRET_FILE
 
 # PyNaCl for Ed25519 (libsodium binding)
 try:
@@ -57,7 +57,7 @@ except ImportError:
 AGORA_DB = get_db_path()
 CHALLENGE_TTL_SECONDS = 60
 JWT_TTL_HOURS = 24
-JWT_SECRET_FILE = Path(__file__).parent.parent / "data" / ".jwt_secret"
+JWT_SECRET_FILE = CONFIG_JWT_SECRET_FILE
 
 
 # =============================================================================

@@ -595,7 +595,7 @@ class TestAuditTrail:
             "SELECT action, agent_address FROM witness_log WHERE action = ?",
             ("auth_success",)
         )
-        row = conn.fetchone()
+        row = cursor.fetchone()
         conn.close()
         
         assert row is not None

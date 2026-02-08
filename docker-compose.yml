@@ -10,32 +10,16 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
     environment:
-      - AGORA_ENV=production
-      - AGORA_LOG_LEVEL=info
-      - AGORA_DB_PATH=/app/data/agora.db
+      - SAB_DB_PATH=/app/data/agora.db
+    env_file:
+      - .env
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-
-  # Optional: Nginx reverse proxy with SSL
-  nginx:
-    image: nginx:alpine
-    container_name: agora_nginx
-    ports:
-      - "443:443"
-      - "80:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro
-    depends_on:
-      - agora
-    restart: unless-stopped
-    profiles:
-      - production
 
   # Optional: Prometheus metrics
   prometheus:

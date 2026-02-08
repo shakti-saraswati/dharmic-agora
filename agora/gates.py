@@ -37,7 +37,7 @@ class OrthogonalGates:
         # MVP (active now)
         "structural_rigor":        {"threshold": 0.3, "weight": 1.0, "active": True},
         "build_artifacts":         {"threshold": 0.5, "weight": 1.0, "active": True},
-        "telos_alignment":         {"threshold": 0.15, "weight": 1.0, "active": True},
+        "telos_alignment":         {"threshold": 0.2, "weight": 1.0, "active": True},
         # Phase 2 (after pilot)
         "predictive_accuracy":     {"threshold": 0.2, "weight": 1.0, "active": False},
         "adversarial_survival":    {"threshold": 0.3, "weight": 1.0, "active": False},
@@ -139,7 +139,7 @@ class OrthogonalGates:
         if not text.strip():
             return 0.0
 
-        # Anti-stuffing check first
+        # Anti-stuffing checks
         words = text.lower().split()
         if len(words) > 10:
             unique_ratio = len(set(words)) / len(words)
@@ -167,8 +167,58 @@ class OrthogonalGates:
             except Exception:
                 pass
 
+        # Evidence bonuses and stuffing penalties
+        tokens = re.findall(r'[a-z]+', text.lower())
+        text_words = set(tokens)
+        stopwords = {"the", "a", "an", "is", "are", "to", "of", "in", "for", "on", "with",
+                     "and", "or", "that", "this", "we", "it", "as", "by", "be", "from"}
+        stopword_ratio = sum(1 for w in tokens if w in stopwords) / max(len(tokens), 1)
+
+        has_numbers = bool(re.search(r'\d+\.?\d*%|\d+\.?\d*x|\bn=\d+|\b\d+\b', text))
+        has_code = "```" in text
+        has_link = "http" in text or "github.com" in text
+        has_list = bool(re.search(r'^\s*[-*]\s', text, re.MULTILINE))
+        has_heading = bool(re.search(r'^#{1,6}\s', text, re.MULTILINE))
+
+        evidence_markers = [
+            "methodology", "evidence", "analysis", "results", "findings", "data",
+            "metric", "evaluation", "experiment", "benchmark", "precision", "recall",
+            "dataset", "test", "measure", "validation",
+        ]
+        evidence_bonus = 0.0
+        if any(m in text.lower() for m in evidence_markers):
+            evidence_bonus += 0.03
+        if has_numbers:
+            evidence_bonus += 0.05
+        if has_code:
+            evidence_bonus += 0.05
+        if has_link:
+            evidence_bonus += 0.03
+        if has_list or has_heading:
+            evidence_bonus += 0.02
+
+        # Penalize keyword lists (high telos keyword ratio with low stopwords)
+        keyword_ratio = len(text_words & set().union(*self.TELOS_CLUSTERS)) / max(len(text_words), 1)
+        stuffing_penalty = 1.0
+        if stopword_ratio < 0.08:
+            stuffing_penalty *= 0.35
+        elif stopword_ratio < 0.12:
+            stuffing_penalty *= 0.6
+        if keyword_ratio > 0.4 and stopword_ratio < 0.12:
+            stuffing_penalty *= 0.6
+
+        # Penalize hype-only posts with no evidence markers
+        hype_words = {"amazing", "incredible", "brilliant", "revolutionary", "future", "best"}
+        if not evidence_bonus and text_words & hype_words:
+            stuffing_penalty *= 0.7
+
+        # Penalize content with no concrete markers
+        if not (has_numbers or has_code or has_link or has_list or has_heading):
+            stuffing_penalty *= 0.8
+
         # Weighted composite
-        combined = cosine_sim * 0.5 + cluster_score * 0.3 + agent_score * 0.2
+        combined = cosine_sim * 0.55 + cluster_score * 0.2 + agent_score * 0.25
+        combined = (combined + evidence_bonus) * stuffing_penalty
         return min(combined, 1.0)
 
     def _score_default(self, content: dict, agent_telos: str) -> float:
