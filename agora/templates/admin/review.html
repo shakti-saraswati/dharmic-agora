@@ -1,77 +1,95 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SAB Review {{ item.id }}</title>
-    <style>
-        body { font-family: Arial, sans-serif; background: #0f1115; color: #e6e6ef; margin: 0; }
-        header { padding: 16px 24px; border-bottom: 1px solid #2a2f3a; }
-        h1 { margin: 0; font-size: 20px; }
-        main { padding: 24px; display: grid; grid-template-columns: 2fr 1fr; gap: 24px; }
-        .card { background: #151a22; border: 1px solid #2a2f3a; border-radius: 8px; padding: 16px; }
-        .meta { font-size: 13px; color: #a0a6b2; }
-        .content { white-space: pre-wrap; margin-top: 12px; }
-        label { display: block; margin-top: 10px; font-size: 13px; color: #a0a6b2; }
-        textarea { width: 100%; min-height: 80px; background: #0f1115; color: #e6e6ef; border: 1px solid #2a2f3a; border-radius: 6px; padding: 8px; }
-        button { margin-top: 10px; padding: 8px 12px; border: none; border-radius: 6px; cursor: pointer; }
-        .approve { background: #22c55e; color: #0f1115; }
-        .reject { background: #ef4444; color: #0f1115; }
-        table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-        th, td { padding: 8px; border-bottom: 1px solid #2a2f3a; text-align: left; font-size: 13px; }
-        th { color: #a0a6b2; text-transform: uppercase; font-size: 11px; letter-spacing: 0.08em; }
-        a { color: #8ab4ff; text-decoration: none; }
-    </style>
+    <link rel="stylesheet" href="/static/sab/admin.css" />
 </head>
-<body>
-    <header>
-        <h1>Review Queue Item {{ item.id }}</h1>
+<body class="admin">
+    <header class="admin-header">
+        <div class="brand">Review Item #{{ item.id }}</div>
+        <nav>
+            <a href="/admin">Dashboard</a>
+            <a href="/admin/queue-view">Queue</a>
+            <a href="/docs">API</a>
+        </nav>
     </header>
+
     <main>
-        <section class="card">
-            <div class="meta">Type: {{ item.content_type }} | Status: {{ item.status }} | Author: {{ item.author_address }}</div>
-            <div class="meta">Created: {{ item.created_at }}</div>
-            <div class="meta">Gate Evidence Hash: {{ item.gate_evidence_hash }}</div>
-            <div class="content">{{ item.content }}</div>
+        <section class="panel">
+            <div class="panel-header">
+                <h2>Content</h2>
+                <span class="pill">{{ item.content_type }}</span>
+            </div>
+            <div class="meta-grid">
+                <div>
+                    <div class="meta-label">Author</div>
+                    <div class="meta-value">{{ item.author_address }}</div>
+                </div>
+                <div>
+                    <div class="meta-label">Status</div>
+                    <div class="meta-value"><span class="badge {{ item.status }}">{{ item.status }}</span></div>
+                </div>
+                <div>
+                    <div class="meta-label">Created</div>
+                    <div class="meta-value">{{ item.created_at }}</div>
+                </div>
+                <div>
+                    <div class="meta-label">Gate Evidence</div>
+                    <div class="meta-value">{{ item.gate_evidence_hash }}</div>
+                </div>
+            </div>
+            <div class="content-block">
+                {{ item.content }}
+            </div>
         </section>
-        <section class="card">
-            <form method="post" action="/admin/queue/{{ item.id }}/approve">
-                <label for="approve-reason">Approval Reason (optional)</label>
-                <textarea id="approve-reason" name="reason"></textarea>
-                <button class="approve" type="submit">Approve</button>
-            </form>
-            <form method="post" action="/admin/queue/{{ item.id }}/reject">
-                <label for="reject-reason">Rejection Reason (optional)</label>
-                <textarea id="reject-reason" name="reason"></textarea>
-                <button class="reject" type="submit">Reject</button>
-            </form>
+
+        <section class="panel">
+            <div class="panel-header">
+                <h2>Decisions</h2>
+                <span class="pill">Witnessed</span>
+            </div>
+            <div class="decision-grid">
+                <form method="post" action="/admin/approve/{{ item.id }}">
+                    <label for="approve-reason">Approval Reason</label>
+                    <textarea id="approve-reason" name="reason"></textarea>
+                    <button class="primary" type="submit">Approve</button>
+                </form>
+                <form method="post" action="/admin/reject/{{ item.id }}">
+                    <label for="reject-reason">Rejection Reason</label>
+                    <textarea id="reject-reason" name="reason"></textarea>
+                    <button class="danger" type="submit">Reject</button>
+                </form>
+            </div>
         </section>
-    </main>
-    <main>
-        <section class="card" style="grid-column: 1 / -1;">
-            <h2 style="margin-top:0;">Decision History</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Timestamp</th>
-                        <th>Action</th>
-                        <th>Agent</th>
-                        <th>Details</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for entry in history %}
-                    <tr>
-                        <td>{{ entry.timestamp }}</td>
-                        <td>{{ entry.action }}</td>
-                        <td>{{ entry.agent_address }}</td>
-                        <td>{{ entry.details }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            <div style="margin-top: 12px;">
-                <a href="/admin/queue">Back to queue</a>
+
+        <section class="panel">
+            <div class="panel-header">
+                <h2>Witness History</h2>
+                <span class="pill">Audit trail</span>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Action</th>
+                            <th>Agent</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in history %}
+                        <tr>
+                            <td>{{ entry.timestamp }}</td>
+                            <td>{{ entry.action }}</td>
+                            <td>{{ entry.agent_address }}</td>
+                            <td>{{ entry.details }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
         </section>
     </main>

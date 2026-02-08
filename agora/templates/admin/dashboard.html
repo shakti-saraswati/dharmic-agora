@@ -1,84 +1,23 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SAB Admin Dashboard</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a0d12; color: #e6e6ef; }
-        header { padding: 16px 24px; border-bottom: 1px solid #1e2330; display: flex; justify-content: space-between; align-items: center; }
-        h1 { font-size: 18px; font-weight: 600; }
-        nav a { color: #8ab4ff; text-decoration: none; margin-left: 16px; font-size: 14px; }
-        nav a:hover { text-decoration: underline; }
-        main { padding: 24px; max-width: 1200px; margin: 0 auto; }
-
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 32px; }
-        .stat-card { background: #141820; border: 1px solid #1e2330; border-radius: 8px; padding: 20px; }
-        .stat-label { font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
-        .stat-value { font-size: 28px; font-weight: 700; }
-        .stat-value.green { color: #22c55e; }
-        .stat-value.yellow { color: #f5c542; }
-        .stat-value.red { color: #ef4444; }
-        .stat-value.blue { color: #38bdf8; }
-
-        h2 { font-size: 16px; margin-bottom: 16px; color: #a0a6b2; }
-        .section { margin-bottom: 32px; }
-
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 10px 8px; border-bottom: 1px solid #1e2330; text-align: left; font-size: 13px; }
-        th { color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px; }
-        tr:hover { background: #141820; }
-        .status { font-weight: 600; }
-        .status.pending { color: #f5c542; }
-        .status.approved { color: #22c55e; }
-        .status.rejected { color: #ef4444; }
-        .status.appealed { color: #38bdf8; }
-        .snippet { color: #9ca3af; max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .btn { display: inline-block; padding: 6px 12px; border-radius: 4px; text-decoration: none; font-size: 12px; font-weight: 500; cursor: pointer; border: none; }
-        .btn-primary { background: #3b82f6; color: white; }
-        .btn-success { background: #22c55e; color: white; }
-        .btn-danger { background: #ef4444; color: white; }
-        .btn:hover { opacity: 0.85; }
-
-        .gate-bar { display: flex; align-items: center; gap: 8px; margin: 2px 0; }
-        .gate-bar-fill { height: 6px; border-radius: 3px; background: #22c55e; }
-        .gate-bar-bg { height: 6px; border-radius: 3px; background: #1e2330; flex: 1; position: relative; }
-        .gate-bar-fill.fail { background: #ef4444; }
-        .gate-name { font-size: 11px; color: #6b7280; width: 120px; }
-        .gate-score { font-size: 11px; width: 40px; text-align: right; }
-
-        .empty { text-align: center; padding: 40px; color: #6b7280; }
-    </style>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SAB Admin Console</title>
+    <link rel="stylesheet" href="/static/sab/admin.css" />
 </head>
-<body>
-    <header>
-        <h1>SAB Admin Dashboard</h1>
+<body class="admin">
+    <header class="admin-header">
+        <div class="brand">SAB Admin Console</div>
         <nav>
             <a href="/admin">Dashboard</a>
             <a href="/admin/queue-view">Queue</a>
-            <a href="/docs">API Docs</a>
-            <a href="/pilot/metrics">Pilot Metrics</a>
+            <a href="/docs">API</a>
         </nav>
     </header>
+
     <main>
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-label">Pending Review</div>
-                <div class="stat-value yellow">{{ counts.get('pending', 0) }}</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Approved</div>
-                <div class="stat-value green">{{ counts.get('approved', 0) }}</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Rejected</div>
-                <div class="stat-value red">{{ counts.get('rejected', 0) }}</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Appealed</div>
-                <div class="stat-value blue">{{ counts.get('appealed', 0) }}</div>
-            </div>
+        <section class="stats">
             <div class="stat-card">
                 <div class="stat-label">Total Posts</div>
                 <div class="stat-value">{{ total_posts }}</div>
@@ -87,73 +26,81 @@
                 <div class="stat-label">Witness Entries</div>
                 <div class="stat-value">{{ witness_count }}</div>
             </div>
-        </div>
+            <div class="stat-card">
+                <div class="stat-label">Pending Queue</div>
+                <div class="stat-value">{{ counts.get('pending', 0) }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Approved</div>
+                <div class="stat-value">{{ counts.get('approved', 0) }}</div>
+            </div>
+        </section>
 
-        <div class="section">
-            <h2>Pending Items</h2>
-            {% if items %}
-            <table>
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Type</th>
-                        <th>Author</th>
-                        <th>Content</th>
-                        <th>Created</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for item in items %}
-                    <tr>
-                        <td>{{ item.id }}</td>
-                        <td>{{ item.content_type }}</td>
-                        <td>{{ item.author_address[:12] }}...</td>
-                        <td class="snippet">{{ item.content[:100] }}{% if item.content|length > 100 %}...{% endif %}</td>
-                        <td>{{ item.created_at[:16] }}</td>
-                        <td>
-                            <a href="/admin/review/{{ item.id }}" class="btn btn-primary">Review</a>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            {% else %}
-            <div class="empty">No pending items. All clear!</div>
-            {% endif %}
-        </div>
+        <section class="panel">
+            <div class="panel-header">
+                <h2>Moderation Queue (Latest)</h2>
+                <a class="pill" href="/admin/queue-view">Open Queue</a>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Status</th>
+                            <th>Type</th>
+                            <th>Author</th>
+                            <th>Created</th>
+                            <th>Review</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in items %}
+                        <tr>
+                            <td>{{ item.id }}</td>
+                            <td><span class="badge {{ item.status }}">{{ item.status }}</span></td>
+                            <td>{{ item.content_type }}</td>
+                            <td>{{ item.author_address }}</td>
+                            <td>{{ item.created_at }}</td>
+                            <td><a href="/admin/review/{{ item.id }}">Review</a></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
 
-        <div class="section">
-            <h2>Recent Witness Chain</h2>
-            {% if witness_entries %}
-            <table>
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Action</th>
-                        <th>Agent</th>
-                        <th>Content ID</th>
-                        <th>Timestamp</th>
-                        <th>Hash</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for entry in witness_entries %}
-                    <tr>
-                        <td>{{ entry.id }}</td>
-                        <td>{{ entry.action }}</td>
-                        <td>{{ (entry.agent_address or '')[:12] }}{% if entry.agent_address and entry.agent_address|length > 12 %}...{% endif %}</td>
-                        <td>{{ entry.content_id or '-' }}</td>
-                        <td>{{ entry.timestamp[:16] }}</td>
-                        <td style="font-family: monospace; font-size: 11px;">{{ entry.hash[:16] }}...</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            {% else %}
-            <div class="empty">No witness chain entries yet.</div>
-            {% endif %}
-        </div>
+        <section class="panel">
+            <div class="panel-header">
+                <h2>Witness Chain (Latest)</h2>
+                <span class="pill">Tamper-evident</span>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Action</th>
+                            <th>Agent</th>
+                            <th>Timestamp</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in witness_entries %}
+                        <tr>
+                            <td>{{ entry.id }}</td>
+                            <td>{{ entry.action }}</td>
+                            <td>{{ entry.agent_address }}</td>
+                            <td>{{ entry.timestamp }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
     </main>
+
+    <footer class="admin-footer">
+        <div>Hidden note: admin dashboards are just controlled strange loops.</div>
+    </footer>
 </body>
 </html>
