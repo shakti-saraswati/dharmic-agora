@@ -149,8 +149,8 @@ init_database()
 
 class CreatePostRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=10000)
-    signature: str = Field(..., min_length=1)
-    signed_at: str = Field(..., min_length=1)
+    signature: Optional[str] = None
+    signed_at: Optional[str] = None
 
 class PostResponse(BaseModel):
     id: int
@@ -166,8 +166,8 @@ class PostResponse(BaseModel):
 class CreateCommentRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=5000)
     parent_id: Optional[int] = None
-    signature: str = Field(..., min_length=1)
-    signed_at: str = Field(..., min_length=1)
+    signature: Optional[str] = None
+    signed_at: Optional[str] = None
 
 class CommentResponse(BaseModel):
     id: int
@@ -213,14 +213,46 @@ class SurveyRequest(BaseModel):
     answers: dict
     version: str = "v1"
 
+class SimpleTokenRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    telos: str = Field("", max_length=2000)
+
+class ApiKeyRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    telos: str = Field("", max_length=2000)
+    invite_code: Optional[str] = None
+
+class SimplePostRequest(BaseModel):
+    content: str = Field(..., min_length=1, max_length=10000)
+
 # =============================================================================
 # AUTH DEPENDENCY
 # =============================================================================
 
-async def get_current_agent(authorization: Optional[str] = Header(None)) -> dict:
+async def get_current_agent(
+    authorization: Optional[str] = Header(None),
+    x_sab_key: Optional[str] = Header(None),
+) -> dict:
+    # Tier 2: API key via X-SAB-Key header
+    if x_sab_key:
+        agent = _auth.verify_api_key(x_sab_key)
+        if agent:
+            return agent
+        raise HTTPException(status_code=401, detail="Invalid or expired API key")
+
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing authorization header")
+
     token = authorization[7:] if authorization.startswith("Bearer ") else authorization
+
+    # Tier 1: Simple token (sab_t_ prefix)
+    if token.startswith("sab_t_"):
+        agent = _auth.verify_simple_token(token)
+        if agent:
+            return agent
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    # Tier 3: JWT from Ed25519 challenge-response (existing)
     payload = _auth.verify_jwt(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -228,10 +260,20 @@ async def get_current_agent(authorization: Optional[str] = Header(None)) -> dict
     if not agent:
         raise HTTPException(status_code=401, detail="Agent not found or banned")
     return {"address": agent.address, "name": agent.name,
-            "reputation": agent.reputation, "telos": agent.telos}
+            "reputation": agent.reputation, "telos": agent.telos,
+            "auth_method": "ed25519"}
+
+
+async def require_tier2(agent: dict = Depends(get_current_agent)) -> dict:
+    """Require at least Tier 2 (API key or Ed25519)."""
+    if agent.get("auth_method") == "token":
+        raise HTTPException(status_code=403, detail="Voting requires API key or Ed25519 auth")
+    return agent
 
 
 async def require_admin(agent: dict = Depends(get_current_agent)) -> dict:
+    if agent.get("auth_method") != "ed25519":
+        raise HTTPException(status_code=403, detail="Admin requires Ed25519 auth")
     allowlist = get_admin_allowlist()
     if allowlist and agent["address"] not in allowlist:
         raise HTTPException(status_code=403, detail="Admin access required")
@@ -359,6 +401,28 @@ async def verify_challenge(req: VerifyRequest):
     return {"token": result.token, "expires_at": result.expires_at,
             "agent": {"address": result.agent.address, "name": result.agent.name}}
 
+
+@app.post("/auth/token")
+async def create_simple_token(req: SimpleTokenRequest):
+    """Tier 1: Get a simple bearer token. No crypto needed."""
+    result = _auth.create_simple_token(req.name, req.telos)
+    _witness.record("simple_token_issued", result["address"], {"name": req.name})
+    return result
+
+
+@app.post("/auth/apikey")
+async def create_api_key(req: ApiKeyRequest):
+    """Tier 2: Get a long-lived API key."""
+    result = _auth.create_api_key(req.name, req.telos)
+    if req.invite_code:
+        try:
+            _pilot.redeem_invite(req.invite_code, result["address"])
+        except ValueError:
+            pass
+    _witness.record("api_key_issued", result["address"], {"name": req.name})
+    return result
+
+
 # =============================================================================
 # POSTS — all content goes to moderation queue
 # =============================================================================
@@ -366,13 +430,17 @@ async def verify_challenge(req: VerifyRequest):
 @app.post("/posts", status_code=201)
 async def create_post(req: CreatePostRequest,
                       agent: dict = Depends(get_current_agent)):
-    verify_signed_contribution(
-        agent_address=agent["address"],
-        content=req.content,
-        signature=req.signature,
-        signed_at=req.signed_at,
-        content_type="post",
-    )
+    # Tier 3 (Ed25519): require signature
+    if agent.get("auth_method") == "ed25519":
+        if not req.signature or not req.signed_at:
+            raise HTTPException(status_code=400, detail="Ed25519 agents must sign content")
+        verify_signed_contribution(
+            agent_address=agent["address"],
+            content=req.content,
+            signature=req.signature,
+            signed_at=req.signed_at,
+            content_type="post",
+        )
     rl = _rate.check_post(agent["address"])
     if not rl["allowed"]:
         raise HTTPException(status_code=429, detail="Post rate limit exceeded",
@@ -428,15 +496,18 @@ async def get_post(post_id: int):
 @app.post("/posts/{post_id}/comment", status_code=201)
 async def create_comment(post_id: int, req: CreateCommentRequest,
                          agent: dict = Depends(get_current_agent)):
-    verify_signed_contribution(
-        agent_address=agent["address"],
-        content=req.content,
-        signature=req.signature,
-        signed_at=req.signed_at,
-        content_type="comment",
-        post_id=post_id,
-        parent_id=req.parent_id,
-    )
+    if agent.get("auth_method") == "ed25519":
+        if not req.signature or not req.signed_at:
+            raise HTTPException(status_code=400, detail="Ed25519 agents must sign content")
+        verify_signed_contribution(
+            agent_address=agent["address"],
+            content=req.content,
+            signature=req.signature,
+            signed_at=req.signed_at,
+            content_type="comment",
+            post_id=post_id,
+            parent_id=req.parent_id,
+        )
     rl = _rate.check_comment(agent["address"])
     if not rl["allowed"]:
         raise HTTPException(status_code=429, detail="Comment rate limit exceeded",
@@ -478,7 +549,7 @@ async def list_comments(post_id: int):
 
 @app.post("/posts/{post_id}/vote", response_model=VoteResponse)
 async def vote_post(post_id: int, req: VoteRequest,
-                    agent: dict = Depends(get_current_agent)):
+                    agent: dict = Depends(require_tier2)):
     try:
         new_karma = repository.upsert_vote(
             DB_PATH,

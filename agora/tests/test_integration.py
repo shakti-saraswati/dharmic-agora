@@ -422,6 +422,143 @@ class TestPilotEndpoints:
 # SORTING AND PAGINATION TESTS
 # =============================================================================
 
+# =============================================================================
+# MULTI-TIER AUTH TESTS
+# =============================================================================
+
+class TestTier1SimpleToken:
+    def test_get_simple_token(self, fresh_app):
+        client, _, _ = fresh_app
+        resp = client.post("/auth/token", json={
+            "name": "casual-agent", "telos": "just exploring"
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["token"].startswith("sab_t_")
+        assert data["address"].startswith("t_")
+        assert data["auth_method"] == "token"
+
+    def test_post_with_simple_token(self, fresh_app):
+        client, _, _ = fresh_app
+        resp = client.post("/auth/token", json={
+            "name": "poster-agent", "telos": "posting test"
+        })
+        token = resp.json()["token"]
+
+        resp = client.post("/posts", json={
+            "content": "This is a test post from a simple token agent with enough content.",
+        }, headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 201
+        assert resp.json()["status"] == "pending"
+
+    def test_simple_token_cannot_vote(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        admin = _register_and_auth(api_server, monkeypatch, is_admin=True)
+
+        # Create and approve a post via Ed25519 agent
+        user = _register_and_auth(api_server)
+        content = "Substantive content for testing tier permissions on voting endpoint."
+        sig, signed_at = _sign_content(user, content)
+        resp = client.post("/posts", json={
+            "content": content, "signature": sig, "signed_at": signed_at,
+        }, headers=user["headers"])
+        queue_id = resp.json()["queue_id"]
+        client.post(f"/admin/approve/{queue_id}", json={"reason": "ok"}, headers=admin["headers"])
+        post_id = client.get("/posts").json()[0]["id"]
+
+        # Get simple token
+        resp = client.post("/auth/token", json={"name": "voter", "telos": "test"})
+        token = resp.json()["token"]
+
+        # Try to vote — should fail
+        resp = client.post(f"/posts/{post_id}/vote",
+                           json={"vote": 1},
+                           headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 403
+
+
+class TestTier2ApiKey:
+    def test_get_api_key(self, fresh_app):
+        client, _, _ = fresh_app
+        resp = client.post("/auth/apikey", json={
+            "name": "bot-agent", "telos": "automated research"
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["api_key"].startswith("sab_k_")
+        assert data["address"].startswith("k_")
+        assert data["auth_method"] == "api_key"
+
+    def test_post_with_api_key(self, fresh_app):
+        client, _, _ = fresh_app
+        resp = client.post("/auth/apikey", json={
+            "name": "research-bot", "telos": "data collection"
+        })
+        api_key = resp.json()["api_key"]
+
+        resp = client.post("/posts", json={
+            "content": "Automated research post from an API key agent with structured content.",
+        }, headers={"X-SAB-Key": api_key})
+        assert resp.status_code == 201
+        assert resp.json()["status"] == "pending"
+
+    def test_api_key_can_vote(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        admin = _register_and_auth(api_server, monkeypatch, is_admin=True)
+
+        # Create and approve a post
+        user = _register_and_auth(api_server)
+        content = "Content for testing API key voting permissions on the platform."
+        sig, signed_at = _sign_content(user, content)
+        resp = client.post("/posts", json={
+            "content": content, "signature": sig, "signed_at": signed_at,
+        }, headers=user["headers"])
+        queue_id = resp.json()["queue_id"]
+        client.post(f"/admin/approve/{queue_id}", json={"reason": "ok"}, headers=admin["headers"])
+        post_id = client.get("/posts").json()[0]["id"]
+
+        # Get API key and vote
+        resp = client.post("/auth/apikey", json={"name": "voter-bot", "telos": "test"})
+        api_key = resp.json()["api_key"]
+
+        resp = client.post(f"/posts/{post_id}/vote",
+                           json={"vote": 1},
+                           headers={"X-SAB-Key": api_key})
+        assert resp.status_code == 200
+
+    def test_api_key_cannot_admin(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        # Need an admin so the allowlist is set
+        _register_and_auth(api_server, monkeypatch, is_admin=True)
+
+        resp = client.post("/auth/apikey", json={"name": "sneaky", "telos": "test"})
+        api_key = resp.json()["api_key"]
+
+        resp = client.get("/admin/queue", headers={"X-SAB-Key": api_key})
+        assert resp.status_code == 403
+
+
+class TestTierPermissions:
+    def test_ed25519_can_admin(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        admin = _register_and_auth(api_server, monkeypatch, is_admin=True)
+        resp = client.get("/admin/queue", headers=admin["headers"])
+        assert resp.status_code == 200
+
+    def test_simple_token_cannot_admin(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        _register_and_auth(api_server, monkeypatch, is_admin=True)
+
+        resp = client.post("/auth/token", json={"name": "sneaky", "telos": "test"})
+        token = resp.json()["token"]
+        resp = client.get("/admin/queue", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 403
+
+
+# =============================================================================
+# SORTING AND PAGINATION TESTS
+# =============================================================================
+
 class TestListingSorting:
     def test_posts_sort_by_karma(self, fresh_app, monkeypatch):
         client, api_server, _ = fresh_app

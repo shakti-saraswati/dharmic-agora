@@ -256,6 +256,30 @@ class AgentAuth:
             )
         """)
 
+        # Simple tokens (Tier 1 — lowest barrier)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS simple_tokens (
+                token TEXT PRIMARY KEY,
+                address TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                telos TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+        """)
+
+        # API keys (Tier 2 — medium barrier, stored as hash)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS api_keys (
+                key_hash TEXT PRIMARY KEY,
+                address TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                telos TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+        """)
+
         conn.commit()
         conn.close()
 
@@ -585,6 +609,108 @@ class AgentAuth:
         conn.close()
 
         self._witness("agent_banned", address, {"reason": reason})
+
+    # =========================================================================
+    # TIER 1: Simple Token Auth (lowest barrier)
+    # =========================================================================
+
+    def create_simple_token(self, name: str, telos: str = "") -> dict:
+        """
+        Create a simple bearer token. No crypto required.
+
+        Returns:
+            {"token": "sab_t_...", "address": "...", "name": "...", "expires_at": "..."}
+        """
+        token = f"sab_t_{secrets.token_hex(24)}"
+        address = f"t_{hashlib.sha256(token.encode()).hexdigest()[:14]}"
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(hours=JWT_TTL_HOURS)
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                "INSERT INTO simple_tokens (token, address, name, telos, created_at, expires_at) VALUES (?,?,?,?,?,?)",
+                (token, address, name, telos, now.isoformat(), expires_at.isoformat()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        self._witness("simple_token_created", address, {"name": name})
+        return {"token": token, "address": address, "name": name,
+                "expires_at": expires_at.isoformat(), "auth_method": "token"}
+
+    def verify_simple_token(self, token: str) -> Optional[dict]:
+        """Verify a simple token. Returns agent dict or None."""
+        if not token.startswith("sab_t_"):
+            return None
+        conn = sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT address, name, telos, expires_at FROM simple_tokens WHERE token=?",
+                (token,),
+            ).fetchone()
+            if not row:
+                return None
+            address, name, telos, expires_at = row
+            if datetime.fromisoformat(expires_at) < datetime.now(timezone.utc):
+                return None
+            return {"address": address, "name": name, "telos": telos,
+                    "reputation": 0.0, "auth_method": "token"}
+        finally:
+            conn.close()
+
+    # =========================================================================
+    # TIER 2: API Key Auth (medium barrier)
+    # =========================================================================
+
+    def create_api_key(self, name: str, telos: str = "", expires_days: int = 90) -> dict:
+        """
+        Create a long-lived API key. Stored as SHA-256 hash.
+
+        Returns:
+            {"api_key": "sab_k_...", "address": "...", "name": "...", "expires_at": "..."}
+        """
+        raw_key = f"sab_k_{secrets.token_hex(32)}"
+        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+        address = f"k_{key_hash[:14]}"
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(days=expires_days)
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                "INSERT INTO api_keys (key_hash, address, name, telos, created_at, expires_at) VALUES (?,?,?,?,?,?)",
+                (key_hash, address, name, telos, now.isoformat(), expires_at.isoformat()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        self._witness("api_key_created", address, {"name": name})
+        return {"api_key": raw_key, "address": address, "name": name,
+                "expires_at": expires_at.isoformat(), "auth_method": "api_key"}
+
+    def verify_api_key(self, raw_key: str) -> Optional[dict]:
+        """Verify an API key. Returns agent dict or None."""
+        if not raw_key.startswith("sab_k_"):
+            return None
+        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+        conn = sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT address, name, telos, expires_at FROM api_keys WHERE key_hash=?",
+                (key_hash,),
+            ).fetchone()
+            if not row:
+                return None
+            address, name, telos, expires_at = row
+            if datetime.fromisoformat(expires_at) < datetime.now(timezone.utc):
+                return None
+            return {"address": address, "name": name, "telos": telos,
+                    "reputation": 0.0, "auth_method": "api_key"}
+        finally:
+            conn.close()
 
 
 # =============================================================================
