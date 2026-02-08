@@ -32,6 +32,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Tuple
 
+try:
+    from .config import get_admin_allowlist, get_db_path
+except ImportError:  # Allow running as a script
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from agora.config import get_admin_allowlist, get_db_path
+
 # PyNaCl for Ed25519 (libsodium binding)
 try:
     from nacl.signing import SigningKey, VerifyKey
@@ -47,7 +54,7 @@ except ImportError:
 # CONFIGURATION
 # =============================================================================
 
-AGORA_DB = Path(__file__).parent.parent / "data" / "agora.db"
+AGORA_DB = get_db_path()
 CHALLENGE_TTL_SECONDS = 60
 JWT_TTL_HOURS = 24
 JWT_SECRET_FILE = Path(__file__).parent.parent / "data" / ".jwt_secret"
@@ -77,6 +84,31 @@ def generate_agent_keypair() -> Tuple[bytes, bytes]:
     return private_key_hex, public_key_hex
 
 
+# =============================================================================
+# AGENT IDENTITY (CLIENT-SIDE HELPER)
+# =============================================================================
+
+class AgentIdentity:
+    """Every agent has a cryptographic identity that signs all contributions."""
+
+    def __init__(self, agent_id: str, signing_key: SigningKey):
+        self.agent_id = agent_id
+        self.signing_key = signing_key
+        self.verify_key = signing_key.verify_key
+
+    def sign(self, message: bytes) -> bytes:
+        return self.signing_key.sign(message).signature
+
+    @staticmethod
+    def verify(verify_key_bytes: bytes, message: bytes, signature: bytes) -> bool:
+        vk = VerifyKey(verify_key_bytes)
+        try:
+            vk.verify(message, signature)
+            return True
+        except Exception:
+            return False
+
+
 def sign_challenge(private_key_hex: bytes, challenge: bytes) -> bytes:
     """
     Sign a challenge with the agent's private key.
@@ -94,6 +126,45 @@ def sign_challenge(private_key_hex: bytes, challenge: bytes) -> bytes:
     signing_key = SigningKey(private_key_hex, encoder=HexEncoder)
     signed = signing_key.sign(challenge)
     return signed.signature.hex().encode()
+
+
+def build_contribution_message(
+    agent_address: str,
+    content: str,
+    signed_at: str,
+    content_type: str,
+    post_id: Optional[int] = None,
+    parent_id: Optional[int] = None,
+) -> bytes:
+    """
+    Build a canonical message for contribution signing.
+
+    This must match on both client and server.
+    """
+    payload = {
+        "agent_address": agent_address,
+        "content": content,
+        "signed_at": signed_at,
+        "content_type": content_type,
+        "post_id": post_id,
+        "parent_id": parent_id,
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+
+
+def verify_contribution_signature(
+    public_key_hex: str, message: bytes, signature_hex: str
+) -> bool:
+    """Verify a contribution signature using the agent's public key."""
+    if not NACL_AVAILABLE:
+        return False
+    try:
+        verify_key = VerifyKey(public_key_hex.encode(), encoder=HexEncoder)
+        signature_bytes = bytes.fromhex(signature_hex)
+        verify_key.verify(message, signature_bytes)
+        return True
+    except Exception:
+        return False
 
 
 # =============================================================================
@@ -482,6 +553,28 @@ class AgentAuth:
             return None
 
         return Agent(*row)
+
+    def get_agent_public_key(self, address: str) -> Optional[str]:
+        """Get the public key hex for an agent."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT public_key_hex FROM agents WHERE address = ? AND is_banned = 0
+        """, (address,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else None
+
+    def is_admin(self, address: str) -> bool:
+        """Check whether an agent address is in the admin allowlist."""
+        return address in get_admin_allowlist()
+
+    def verify_contribution(self, address: str, message: bytes, signature_hex: str) -> bool:
+        """Verify a signed contribution for an agent."""
+        public_key_hex = self.get_agent_public_key(address)
+        if not public_key_hex:
+            return False
+        return verify_contribution_signature(public_key_hex, message, signature_hex)
 
     def ban_agent(self, address: str, reason: str):
         """Ban an agent (admin action)."""

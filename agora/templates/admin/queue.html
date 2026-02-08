@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAB Admin Queue</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #0f1115; color: #e6e6ef; margin: 0; }
+        header { padding: 16px 24px; border-bottom: 1px solid #2a2f3a; }
+        h1 { margin: 0; font-size: 20px; }
+        main { padding: 24px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 10px 8px; border-bottom: 1px solid #2a2f3a; text-align: left; }
+        th { color: #a0a6b2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+        tr:hover { background: #151a22; }
+        .status { font-weight: bold; }
+        .status.pending { color: #f5c542; }
+        .status.approved { color: #22c55e; }
+        .status.rejected { color: #ef4444; }
+        .status.appealed { color: #38bdf8; }
+        a { color: #8ab4ff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .snippet { color: #c3c6d1; font-size: 13px; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>SAB Moderation Queue</h1>
+    </header>
+    <main>
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Author</th>
+                    <th>Created</th>
+                    <th>Snippet</th>
+                    <th>Review</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in items %}
+                <tr>
+                    <td>{{ item.id }}</td>
+                    <td>{{ item.content_type }}</td>
+                    <td class="status {{ item.status }}">{{ item.status }}</td>
+                    <td>{{ item.author_address }}</td>
+                    <td>{{ item.created_at }}</td>
+                    <td class="snippet">{{ item.content[:120] }}{% if item.content|length > 120 %}...{% endif %}</td>
+                    <td><a href="/admin/review/{{ item.id }}">Review</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </main>
+</body>
+</html>
