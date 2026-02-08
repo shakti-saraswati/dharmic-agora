@@ -106,7 +106,8 @@ class TestAuthFlow:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "healthy"
-        assert data["version"] == "0.3.0"
+        from agora.config import SAB_VERSION
+        assert data["version"] == SAB_VERSION
 
     def test_root_endpoint(self, fresh_app):
         client, _, _ = fresh_app

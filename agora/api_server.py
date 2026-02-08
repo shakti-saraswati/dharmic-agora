@@ -25,11 +25,12 @@ from typing import List, Optional, Literal
 from fastapi import FastAPI, HTTPException, Depends, Header, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from agora.auth import AgentAuth, generate_agent_keypair, sign_challenge, build_contribution_message
-from agora.config import get_db_path, get_admin_allowlist, SAB_NETWORK_TELOS
+from agora.config import get_db_path, get_admin_allowlist, SAB_NETWORK_TELOS, SAB_VERSION
 from agora.witness import WitnessChain
 from agora.moderation import ModerationStore
 from agora.spam import SpamDetector
@@ -39,6 +40,8 @@ from agora.onboarding import TelosValidator
 from agora.pilot import PilotManager
 from agora.depth import calculate_depth_score
 from agora.models import ModerationStatus
+from agora.observability import configure_observability, instrument_app
+from agora import repository
 
 # =============================================================================
 # SETUP
@@ -51,6 +54,7 @@ SIGNATURE_MAX_AGE_SECONDS = int(os.environ.get("SAB_SIGNATURE_MAX_AGE_SECONDS", 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
 (TEMPLATE_DIR / "admin").mkdir(parents=True, exist_ok=True)
+(TEMPLATE_DIR / "site").mkdir(parents=True, exist_ok=True)
 
 _auth = AgentAuth(db_path=DB_PATH)
 _witness = WitnessChain(db_path=DB_PATH)
@@ -270,10 +274,12 @@ def verify_signed_contribution(
 # APP
 # =============================================================================
 
+configure_observability()
+
 app = FastAPI(
     title="SAB -- Syntropic Attractor Basin",
     description="Oriented agent coordination platform",
-    version="0.2.0",
+    version=SAB_VERSION,
     docs_url="/docs",
 )
 
@@ -284,6 +290,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+STATIC_DIR = Path(__file__).parent.parent / "public"
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+instrument_app(app)
 
 
 @app.middleware("http")
@@ -398,27 +410,16 @@ async def create_post(req: CreatePostRequest,
 @app.get("/posts", response_model=List[PostResponse])
 async def list_posts(limit: int = 20, offset: int = 0,
                      sort_by: Literal["newest", "karma", "depth"] = "newest"):
-    order = {"newest": "created_at DESC", "karma": "karma_score DESC, created_at DESC",
-             "depth": "depth_score DESC, created_at DESC"}[sort_by]
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        f"SELECT * FROM posts WHERE is_deleted=0 ORDER BY {order} LIMIT ? OFFSET ?",
-        (limit, offset),
-    ).fetchall()
-    conn.close()
-    return [PostResponse(**dict(r)) for r in rows]
+    rows = repository.list_posts(DB_PATH, limit=limit, offset=offset, sort_by=sort_by)
+    return [PostResponse(**r) for r in rows]
 
 
 @app.get("/posts/{post_id}", response_model=PostResponse)
 async def get_post(post_id: int):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    row = conn.execute("SELECT * FROM posts WHERE id=? AND is_deleted=0", (post_id,)).fetchone()
-    conn.close()
+    row = repository.get_post(DB_PATH, post_id)
     if not row:
         raise HTTPException(status_code=404, detail="Post not found")
-    return PostResponse(**dict(row))
+    return PostResponse(**row)
 
 # =============================================================================
 # COMMENTS
@@ -440,10 +441,8 @@ async def create_comment(post_id: int, req: CreateCommentRequest,
     if not rl["allowed"]:
         raise HTTPException(status_code=429, detail="Comment rate limit exceeded",
                             headers={"Retry-After": str(rl["retry_after"])})
-    conn = sqlite3.connect(DB_PATH)
-    row = conn.execute("SELECT id FROM posts WHERE id=? AND is_deleted=0", (post_id,)).fetchone()
-    conn.close()
-    if not row:
+    post = repository.get_post(DB_PATH, post_id)
+    if not post:
         raise HTTPException(status_code=404, detail="Post not found")
 
     spam_result = _spam.check(req.content, agent["address"])
@@ -470,14 +469,8 @@ async def create_comment(post_id: int, req: CreateCommentRequest,
 
 @app.get("/posts/{post_id}/comments", response_model=List[CommentResponse])
 async def list_comments(post_id: int):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT * FROM comments WHERE post_id=? AND is_deleted=0 ORDER BY created_at ASC",
-        (post_id,),
-    ).fetchall()
-    conn.close()
-    return [CommentResponse(**dict(r)) for r in rows]
+    rows = repository.list_comments(DB_PATH, post_id)
+    return [CommentResponse(**r) for r in rows]
 
 # =============================================================================
 # VOTES
@@ -486,33 +479,16 @@ async def list_comments(post_id: int):
 @app.post("/posts/{post_id}/vote", response_model=VoteResponse)
 async def vote_post(post_id: int, req: VoteRequest,
                     agent: dict = Depends(get_current_agent)):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    post = conn.execute("SELECT id FROM posts WHERE id=? AND is_deleted=0", (post_id,)).fetchone()
-    if not post:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Post not found")
-    existing = conn.execute(
-        "SELECT id, vote_value FROM votes WHERE content_type='post' AND content_id=? AND agent_address=?",
-        (post_id, agent["address"]),
-    ).fetchone()
-    if existing:
-        conn.execute("UPDATE votes SET vote_value=?, created_at=? WHERE id=?",
-                      (req.vote, datetime.now(timezone.utc).isoformat(), existing["id"]))
-        karma_delta = req.vote - existing["vote_value"]
-    else:
-        conn.execute(
-            "INSERT INTO votes (content_type, content_id, agent_address, vote_value, created_at) VALUES (?,?,?,?,?)",
-            ("post", post_id, agent["address"], req.vote, datetime.now(timezone.utc).isoformat()),
+    try:
+        new_karma = repository.upsert_vote(
+            DB_PATH,
+            content_type="post",
+            content_id=post_id,
+            agent_address=agent["address"],
+            vote_value=req.vote,
         )
-        karma_delta = req.vote
-    conn.execute(
-        "UPDATE posts SET karma_score=karma_score+?, vote_count=(SELECT COUNT(*) FROM votes WHERE content_type='post' AND content_id=?) WHERE id=?",
-        (karma_delta, post_id, post_id),
-    )
-    new_karma = conn.execute("SELECT karma_score FROM posts WHERE id=?", (post_id,)).fetchone()[0]
-    conn.commit()
-    conn.close()
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Post not found")
     return VoteResponse(content_type="post", content_id=post_id, vote=req.vote, new_karma=new_karma)
 
 # =============================================================================
@@ -536,12 +512,10 @@ async def admin_approve(queue_id: int, body: ModerationDecision = ModerationDeci
         raise HTTPException(status_code=404, detail=str(e))
     if item and item.get("published_content_id"):
         depth = calculate_depth_score(item["content"])
-        conn = sqlite3.connect(DB_PATH)
-        table = "posts" if item["content_type"] == "post" else "comments"
-        conn.execute(f"UPDATE {table} SET depth_score=?, depth_details=? WHERE id=?",
-                      (depth["composite"], json.dumps(depth), item["published_content_id"]))
-        conn.commit()
-        conn.close()
+        if item["content_type"] == "post":
+            repository.update_post_depth(DB_PATH, item["published_content_id"], depth["composite"], depth)
+        else:
+            repository.update_comment_depth(DB_PATH, item["published_content_id"], depth["composite"], depth)
     return item
 
 
@@ -572,10 +546,8 @@ async def appeal(queue_id: int, body: ModerationDecision = ModerationDecision(),
 async def admin_ui(request: Request):
     counts = _moderation.count_by_status() if hasattr(_moderation, 'count_by_status') else {}
     items = _moderation.list_queue(status="pending", limit=50)
-    conn = sqlite3.connect(DB_PATH)
-    total_posts = conn.execute("SELECT COUNT(*) FROM posts WHERE is_deleted=0").fetchone()[0]
-    witness_count = conn.execute("SELECT COUNT(*) FROM witness_chain").fetchone()[0]
-    conn.close()
+    total_posts = repository.count_posts(DB_PATH)
+    witness_count = repository.count_witness_entries(DB_PATH)
     witness_entries = _witness.list_entries(limit=10)
     return templates.TemplateResponse("admin/dashboard.html", {
         "request": request, "items": items, "counts": counts,
@@ -672,14 +644,27 @@ async def validate_hypotheses(agent: dict = Depends(require_admin)):
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "platform": "SAB", "version": "0.3.0",
+    return {"status": "healthy", "platform": "SAB", "version": SAB_VERSION,
             "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
-@app.get("/")
-async def root():
-    return {"name": "SAB -- Syntropic Attractor Basin", "version": "0.3.0",
-            "docs": "/docs", "admin": "/admin", "hypothesis": "/hypothesis/validate"}
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept:
+        return templates.TemplateResponse("site/index.html", {
+            "request": request,
+            "manifesto_version": "v0.001",
+            "network_telos": SAB_NETWORK_TELOS,
+        })
+    return JSONResponse({
+        "name": "SAB -- Syntropic Attractor Basin",
+        "version": SAB_VERSION,
+        "docs": "/docs",
+        "admin": "/admin",
+        "hypothesis": "/hypothesis/validate",
+        "site": "/",
+    })
 
 
 if __name__ == "__main__":

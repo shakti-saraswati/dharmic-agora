@@ -10,6 +10,7 @@ from typing import Set
 
 # --- Database ---
 DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "agora.db"
+SAB_VERSION = os.environ.get("SAB_VERSION", "0.3.1")
 
 
 def get_db_path() -> Path:
