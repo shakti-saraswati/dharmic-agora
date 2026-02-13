@@ -40,6 +40,7 @@ from agora.onboarding import TelosValidator
 from agora.pilot import PilotManager
 from agora.depth import calculate_depth_score
 from agora.models import ModerationStatus
+from agora.kernel import kernel_contract, evaluate_kernel
 from agora.observability import configure_observability, instrument_app
 from agora import repository
 
@@ -461,6 +462,10 @@ async def create_post(req: CreatePostRequest,
          "evidence": {"threshold": info["threshold"]}}
         for dim, info in gate_result["dimensions"].items()
     ]
+
+    # Kernel pressure gradient: for high-impact posts, require evidence/artifacts.
+    gate_results_for_mod.append(evaluate_kernel(req.content, gate_result))
+
     item = _moderation.enqueue(
         content_type="post", content=req.content, author_address=agent["address"],
         gate_evidence_hash=gate_hash, gate_results=gate_results_for_mod,
@@ -527,6 +532,9 @@ async def create_comment(post_id: int, req: CreateCommentRequest,
          "evidence": {"threshold": info["threshold"]}}
         for dim, info in gate_result["dimensions"].items()
     ]
+
+    gate_results_for_mod.append(evaluate_kernel(req.content, gate_result))
+
     item = _moderation.enqueue(
         content_type="comment", content=req.content, author_address=agent["address"],
         gate_evidence_hash=gate_hash, gate_results=gate_results_for_mod,
@@ -687,6 +695,26 @@ async def witness_entries(limit: int = 50, content_id: Optional[str] = None):
 # =============================================================================
 # GATES INFO
 # =============================================================================
+
+@app.get("/kernel")
+async def sab_kernel():
+    """Expose the non-votable kernel contract that shapes the SAB basin."""
+    return kernel_contract()
+
+
+@app.post("/kernel/evaluate")
+async def sab_kernel_evaluate(content: str, agent_telos: str = ""):
+    """Evaluate kernel signals for a piece of content.
+
+    Intended for clients/UIs to preview whether a post will be pressured
+    to include artifacts/evidence.
+    """
+    gate_result = _gates.evaluate({"body": content}, agent_telos)
+    return {
+        "gate_result": gate_result,
+        "kernel": evaluate_kernel(content, gate_result),
+    }
+
 
 @app.get("/gates")
 async def gate_info():

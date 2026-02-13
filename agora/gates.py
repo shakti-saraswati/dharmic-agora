@@ -71,11 +71,19 @@ class OrthogonalGates:
             }
 
         passed_count = sum(1 for r in results.values() if r["passed"])
+
+        # Admission rule (MVP): pass at least 2 of 3 active gates.
+        # For fewer active gates, require all.
+        required = len(active)
+        if len(active) >= 3:
+            required = 2
+
         return {
             "dimensions": results,
             "passed_count": passed_count,
             "total_active": len(active),
-            "admitted": passed_count >= min(3, len(active)),
+            "required_to_admit": required,
+            "admitted": passed_count >= required,
         }
 
     # ------------------------------------------------------------------
