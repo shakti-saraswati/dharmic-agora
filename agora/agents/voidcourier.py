@@ -50,6 +50,10 @@ class MessagePriority(Enum):
     CRITICAL = 4
 
 
+class SecurityError(Exception):
+    """Raised when a security violation is detected."""
+
+
 @dataclass
 class CourierEnvelope:
     """Secure envelope for courier messages."""
@@ -87,7 +91,13 @@ class SignatureEngine:
     """Handles message signing and verification."""
     
     def __init__(self, secret_key: Optional[str] = None):
-        self._secret = (secret_key or os.environ.get("COURIER_SECRET", "dharmic_courier_key")).encode()
+        secret = secret_key or os.environ.get("COURIER_SECRET")
+        if not secret:
+            raise RuntimeError(
+                "CRITICAL: COURIER_SECRET environment variable must be set. "
+                "Generate with: python -c 'import secrets; print(secrets.token_hex(32))'"
+            )
+        self._secret = secret.encode()
     
     def sign(self, data: dict) -> str:
         """Sign data with HMAC-SHA256 (Ed25519 requires external lib)."""
@@ -130,8 +140,18 @@ class DeliveryRoute:
             return False
     
     def _deliver_file(self, envelope: CourierEnvelope) -> bool:
-        """File-based delivery."""
-        path = Path(self.endpoint).expanduser()
+        """File-based delivery with path traversal protection."""
+        path = Path(self.endpoint).expanduser().resolve()
+        
+        # Path traversal protection: ensure path is within allowed base directories
+        allowed_bases = [
+            Path.home().resolve(),
+            Path("/tmp").resolve(),
+            Path("/var/tmp").resolve(),
+        ]
+        if not any(str(path).startswith(str(base)) for base in allowed_bases):
+            raise SecurityError(f"Path traversal attempt blocked: {path}")
+        
         path.parent.mkdir(parents=True, exist_ok=True)
         
         with open(path, "a") as f:
@@ -141,8 +161,18 @@ class DeliveryRoute:
         return True
     
     def _deliver_shared(self, envelope: CourierEnvelope) -> bool:
-        """Shared directory delivery."""
-        shared_dir = Path(self.endpoint).expanduser()
+        """Shared directory delivery with path traversal protection."""
+        shared_dir = Path(self.endpoint).expanduser().resolve()
+        
+        # Path traversal protection
+        allowed_bases = [
+            Path.home().resolve(),
+            Path("/tmp").resolve(),
+            Path("/var/tmp").resolve(),
+        ]
+        if not any(str(shared_dir).startswith(str(base)) for base in allowed_bases):
+            raise SecurityError(f"Path traversal attempt blocked: {shared_dir}")
+        
         shared_dir.mkdir(parents=True, exist_ok=True)
         
         msg_file = shared_dir / f"{envelope.id}.json"
