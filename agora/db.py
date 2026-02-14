@@ -440,3 +440,15 @@ def get_db() -> AgoraDB:
     if _db is None:
         _db = AgoraDB()
     return _db
+
+# SQL Injection Protection — Column Allowlist
+ALLOWED_COLUMNS = {
+    "posts": ["id", "content", "author_address", "created_at", "signature"],
+    "users": ["address", "public_key", "created_at"],
+    "votes": ["post_id", "voter_address", "value", "created_at"]
+}
+
+def validate_columns(table: str, columns: list) -> bool:
+    """Validate columns against allowlist to prevent SQL injection."""
+    allowed = ALLOWED_COLUMNS.get(table, [])
+    return all(col in allowed for col in columns)

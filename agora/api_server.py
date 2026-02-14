@@ -326,12 +326,17 @@ app = FastAPI(
     docs_url="/docs",
 )
 
+# CORS:restrictive by default - read allowed origins from env
+_cors_origins = os.environ.get("SAB_CORS_ORIGINS", "").split(",")
+if not _cors_origins or _cors_origins == ['']:
+    _cors_origins = ["http://localhost:3000", "http://localhost:5173"]  # Dev defaults
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
 )
 
 STATIC_DIR = Path(__file__).parent.parent / "public"
@@ -769,3 +774,14 @@ async def root(request: Request):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# HTTPS Enforcement Middleware
+@app.middleware("http")
+async def enforce_https(request: Request, call_next):
+    if os.environ.get("ENFORCE_HTTPS", "false").lower() == "true":
+        if request.headers.get("x-forwarded-proto") != "https":
+            return JSONResponse(
+                status_code=400,
+                content={"error": "HTTPS required"}
+            )
+    return await call_next(request)
