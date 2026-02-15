@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    container_name: mmk-nats
+    ports:
+      - "4222:4222"  # Client connections
+      - "8222:8222"  # HTTP monitoring
+    volumes:
+      - ./nats.conf:/etc/nats/nats.conf:ro
+      - nats-data:/data
+    command: ["-c", "/etc/nats/nats.conf"]
+    restart: unless-stopped
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  sab-api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: mmk-sab-api
+    ports:
+      - "8000:8000"
+    environment:
+      - NATS_URL=nats://nats:4222
+    volumes:
+      - ../stigmergy:/app/stigmergy
+      - ./heartbeats:/app/infra/heartbeats
+    command: ["uvicorn", "agora.api_unified:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: always
+    mem_limit: 1g
+
+  watchdog:
+    image: python:3.11-slim
+    container_name: mmk-watchdog
+    volumes:
+      - ./watchdog.py:/app/watchdog.py:ro
+      - ./heartbeats:/app/infra/heartbeats
+      - ./alerts.jsonl:/app/infra/alerts.jsonl
+      - ./deadman.touch:/app/infra/deadman.touch
+    working_dir: /app
+    command: ["python3", "watchdog.py"]
+    restart: always
+    mem_limit: 256m
+
+volumes:
+  nats-data:

@@ -1,9 +1,9 @@
 version: '3.8'
 
 services:
-  agora:
+  sab-api:
     build: .
-    container_name: dharmic_agora
+    container_name: sab_api
     ports:
       - "8000:8000"
     volumes:
@@ -11,26 +11,44 @@ services:
       - ./logs:/app/logs
     environment:
       - SAB_DB_PATH=/app/data/agora.db
+      - SAB_JWT_SECRET=${SAB_JWT_SECRET}
+      - SAB_ADMIN_ALLOWLIST=${SAB_ADMIN_ALLOWLIST:-}
     env_file:
       - .env
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+    networks:
+      - sab-network
 
-  # Optional: Prometheus metrics
-  prometheus:
-    image: prom/prometheus
-    container_name: agora_prometheus
+  caddy:
+    image: caddy:2-alpine
+    container_name: sab_caddy
     ports:
-      - "9090:9090"
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    profiles:
-      - monitoring
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - SAB_DOMAIN=${SAB_DOMAIN:-sab.openclaw.ai}
+    restart: unless-stopped
+    depends_on:
+      sab-api:
+        condition: service_healthy
+    networks:
+      - sab-network
+
+networks:
+  sab-network:
+    driver: bridge
 
 volumes:
-  agora_data:
+  caddy_data:
+  caddy_config:
