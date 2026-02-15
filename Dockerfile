@@ -18,9 +18,6 @@ COPY . .
 # Create data directory
 RUN mkdir -p /app/data /app/logs
 
-# Initialize database
-RUN python3 -c "from agora.db import init_database; init_database()"
-
 # Expose port
 EXPOSE 8000
 

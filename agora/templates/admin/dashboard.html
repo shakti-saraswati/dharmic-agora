@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SAB Admin Console</title>
+    <link rel="stylesheet" href="/static/sab/admin.css" />
+</head>
+<body class="admin">
+    <header class="admin-header">
+        <div class="brand">SAB Admin Console</div>
+        <nav>
+            <a href="/admin">Dashboard</a>
+            <a href="/admin/queue-view">Queue</a>
+            <a href="/docs">API</a>
+        </nav>
+    </header>
+
+    <main>
+        <section class="stats">
+            <div class="stat-card">
+                <div class="stat-label">Total Posts</div>
+                <div class="stat-value">{{ total_posts }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Witness Entries</div>
+                <div class="stat-value">{{ witness_count }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Pending Queue</div>
+                <div class="stat-value">{{ counts.get('pending', 0) }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Approved</div>
+                <div class="stat-value">{{ counts.get('approved', 0) }}</div>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <h2>Moderation Queue (Latest)</h2>
+                <a class="pill" href="/admin/queue-view">Open Queue</a>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Status</th>
+                            <th>Type</th>
+                            <th>Author</th>
+                            <th>Created</th>
+                            <th>Review</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in items %}
+                        <tr>
+                            <td>{{ item.id }}</td>
+                            <td><span class="badge {{ item.status }}">{{ item.status }}</span></td>
+                            <td>{{ item.content_type }}</td>
+                            <td>{{ item.author_address }}</td>
+                            <td>{{ item.created_at }}</td>
+                            <td><a href="/admin/review/{{ item.id }}">Review</a></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <h2>Witness Chain (Latest)</h2>
+                <span class="pill">Tamper-evident</span>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Action</th>
+                            <th>Agent</th>
+                            <th>Timestamp</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in witness_entries %}
+                        <tr>
+                            <td>{{ entry.id }}</td>
+                            <td>{{ entry.action }}</td>
+                            <td>{{ entry.agent_address }}</td>
+                            <td>{{ entry.timestamp }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <footer class="admin-footer">
+        <div>Hidden note: admin dashboards are just controlled strange loops.</div>
+    </footer>
+</body>
+</html>

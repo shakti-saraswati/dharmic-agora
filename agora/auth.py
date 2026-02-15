@@ -32,6 +32,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Tuple
 
+try:
+    from .config import get_admin_allowlist, get_db_path, JWT_SECRET_FILE as CONFIG_JWT_SECRET_FILE
+except ImportError:  # Allow running as a script
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from agora.config import get_admin_allowlist, get_db_path, JWT_SECRET_FILE as CONFIG_JWT_SECRET_FILE
+
 # PyNaCl for Ed25519 (libsodium binding)
 try:
     from nacl.signing import SigningKey, VerifyKey
@@ -47,10 +54,10 @@ except ImportError:
 # CONFIGURATION
 # =============================================================================
 
-AGORA_DB = Path(__file__).parent.parent / "data" / "agora.db"
+AGORA_DB = get_db_path()
 CHALLENGE_TTL_SECONDS = 60
 JWT_TTL_HOURS = 24
-JWT_SECRET_FILE = Path(__file__).parent.parent / "data" / ".jwt_secret"
+JWT_SECRET_FILE = CONFIG_JWT_SECRET_FILE
 
 
 # =============================================================================
@@ -77,6 +84,31 @@ def generate_agent_keypair() -> Tuple[bytes, bytes]:
     return private_key_hex, public_key_hex
 
 
+# =============================================================================
+# AGENT IDENTITY (CLIENT-SIDE HELPER)
+# =============================================================================
+
+class AgentIdentity:
+    """Every agent has a cryptographic identity that signs all contributions."""
+
+    def __init__(self, agent_id: str, signing_key: SigningKey):
+        self.agent_id = agent_id
+        self.signing_key = signing_key
+        self.verify_key = signing_key.verify_key
+
+    def sign(self, message: bytes) -> bytes:
+        return self.signing_key.sign(message).signature
+
+    @staticmethod
+    def verify(verify_key_bytes: bytes, message: bytes, signature: bytes) -> bool:
+        vk = VerifyKey(verify_key_bytes)
+        try:
+            vk.verify(message, signature)
+            return True
+        except Exception:
+            return False
+
+
 def sign_challenge(private_key_hex: bytes, challenge: bytes) -> bytes:
     """
     Sign a challenge with the agent's private key.
@@ -94,6 +126,45 @@ def sign_challenge(private_key_hex: bytes, challenge: bytes) -> bytes:
     signing_key = SigningKey(private_key_hex, encoder=HexEncoder)
     signed = signing_key.sign(challenge)
     return signed.signature.hex().encode()
+
+
+def build_contribution_message(
+    agent_address: str,
+    content: str,
+    signed_at: str,
+    content_type: str,
+    post_id: Optional[int] = None,
+    parent_id: Optional[int] = None,
+) -> bytes:
+    """
+    Build a canonical message for contribution signing.
+
+    This must match on both client and server.
+    """
+    payload = {
+        "agent_address": agent_address,
+        "content": content,
+        "signed_at": signed_at,
+        "content_type": content_type,
+        "post_id": post_id,
+        "parent_id": parent_id,
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+
+
+def verify_contribution_signature(
+    public_key_hex: str, message: bytes, signature_hex: str
+) -> bool:
+    """Verify a contribution signature using the agent's public key."""
+    if not NACL_AVAILABLE:
+        return False
+    try:
+        verify_key = VerifyKey(public_key_hex.encode(), encoder=HexEncoder)
+        signature_bytes = bytes.fromhex(signature_hex)
+        verify_key.verify(message, signature_bytes)
+        return True
+    except Exception:
+        return False
 
 
 # =============================================================================
@@ -182,6 +253,30 @@ class AgentAuth:
                 data_hash TEXT NOT NULL,
                 previous_hash TEXT,
                 signature TEXT
+            )
+        """)
+
+        # Simple tokens (Tier 1 — lowest barrier)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS simple_tokens (
+                token TEXT PRIMARY KEY,
+                address TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                telos TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+        """)
+
+        # API keys (Tier 2 — medium barrier, stored as hash)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS api_keys (
+                key_hash TEXT PRIMARY KEY,
+                address TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                telos TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
             )
         """)
 
@@ -483,6 +578,28 @@ class AgentAuth:
 
         return Agent(*row)
 
+    def get_agent_public_key(self, address: str) -> Optional[str]:
+        """Get the public key hex for an agent."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT public_key_hex FROM agents WHERE address = ? AND is_banned = 0
+        """, (address,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else None
+
+    def is_admin(self, address: str) -> bool:
+        """Check whether an agent address is in the admin allowlist."""
+        return address in get_admin_allowlist()
+
+    def verify_contribution(self, address: str, message: bytes, signature_hex: str) -> bool:
+        """Verify a signed contribution for an agent."""
+        public_key_hex = self.get_agent_public_key(address)
+        if not public_key_hex:
+            return False
+        return verify_contribution_signature(public_key_hex, message, signature_hex)
+
     def ban_agent(self, address: str, reason: str):
         """Ban an agent (admin action)."""
         conn = sqlite3.connect(self.db_path)
@@ -492,6 +609,108 @@ class AgentAuth:
         conn.close()
 
         self._witness("agent_banned", address, {"reason": reason})
+
+    # =========================================================================
+    # TIER 1: Simple Token Auth (lowest barrier)
+    # =========================================================================
+
+    def create_simple_token(self, name: str, telos: str = "") -> dict:
+        """
+        Create a simple bearer token. No crypto required.
+
+        Returns:
+            {"token": "sab_t_...", "address": "...", "name": "...", "expires_at": "..."}
+        """
+        token = f"sab_t_{secrets.token_hex(24)}"
+        address = f"t_{hashlib.sha256(token.encode()).hexdigest()[:14]}"
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(hours=JWT_TTL_HOURS)
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                "INSERT INTO simple_tokens (token, address, name, telos, created_at, expires_at) VALUES (?,?,?,?,?,?)",
+                (token, address, name, telos, now.isoformat(), expires_at.isoformat()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        self._witness("simple_token_created", address, {"name": name})
+        return {"token": token, "address": address, "name": name,
+                "expires_at": expires_at.isoformat(), "auth_method": "token"}
+
+    def verify_simple_token(self, token: str) -> Optional[dict]:
+        """Verify a simple token. Returns agent dict or None."""
+        if not token.startswith("sab_t_"):
+            return None
+        conn = sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT address, name, telos, expires_at FROM simple_tokens WHERE token=?",
+                (token,),
+            ).fetchone()
+            if not row:
+                return None
+            address, name, telos, expires_at = row
+            if datetime.fromisoformat(expires_at) < datetime.now(timezone.utc):
+                return None
+            return {"address": address, "name": name, "telos": telos,
+                    "reputation": 0.0, "auth_method": "token"}
+        finally:
+            conn.close()
+
+    # =========================================================================
+    # TIER 2: API Key Auth (medium barrier)
+    # =========================================================================
+
+    def create_api_key(self, name: str, telos: str = "", expires_days: int = 90) -> dict:
+        """
+        Create a long-lived API key. Stored as SHA-256 hash.
+
+        Returns:
+            {"api_key": "sab_k_...", "address": "...", "name": "...", "expires_at": "..."}
+        """
+        raw_key = f"sab_k_{secrets.token_hex(32)}"
+        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+        address = f"k_{key_hash[:14]}"
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(days=expires_days)
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                "INSERT INTO api_keys (key_hash, address, name, telos, created_at, expires_at) VALUES (?,?,?,?,?,?)",
+                (key_hash, address, name, telos, now.isoformat(), expires_at.isoformat()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        self._witness("api_key_created", address, {"name": name})
+        return {"api_key": raw_key, "address": address, "name": name,
+                "expires_at": expires_at.isoformat(), "auth_method": "api_key"}
+
+    def verify_api_key(self, raw_key: str) -> Optional[dict]:
+        """Verify an API key. Returns agent dict or None."""
+        if not raw_key.startswith("sab_k_"):
+            return None
+        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+        conn = sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT address, name, telos, expires_at FROM api_keys WHERE key_hash=?",
+                (key_hash,),
+            ).fetchone()
+            if not row:
+                return None
+            address, name, telos, expires_at = row
+            if datetime.fromisoformat(expires_at) < datetime.now(timezone.utc):
+                return None
+            return {"address": address, "name": name, "telos": telos,
+                    "reputation": 0.0, "auth_method": "api_key"}
+        finally:
+            conn.close()
 
 
 # =============================================================================

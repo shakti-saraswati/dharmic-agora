@@ -61,6 +61,12 @@ class AgoraDB:
         with self._conn() as conn:
             cursor = conn.cursor()
 
+            def ensure_column(table: str, column_name: str, column_def: str) -> None:
+                cursor.execute(f"PRAGMA table_info({table})")
+                existing = {row[1] for row in cursor.fetchall()}
+                if column_name not in existing:
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
+
             # Posts table (includes comments)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS posts (
@@ -75,6 +81,8 @@ class AgoraDB:
                     karma INTEGER DEFAULT 0,
                     comment_count INTEGER DEFAULT 0,
                     is_deleted INTEGER DEFAULT 0,
+                    signature TEXT,
+                    signed_at TEXT,
                     FOREIGN KEY (author_address) REFERENCES agents(address),
                     FOREIGN KEY (parent_id) REFERENCES posts(id)
                 )
@@ -106,11 +114,40 @@ class AgoraDB:
                 )
             """)
 
+            # Moderation queue
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS moderation_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content_type TEXT NOT NULL CHECK(content_type IN ('post', 'comment')),
+                    content_id TEXT,
+                    post_id TEXT,
+                    parent_id TEXT,
+                    content TEXT NOT NULL,
+                    author_address TEXT NOT NULL,
+                    gate_evidence_hash TEXT NOT NULL,
+                    gate_results_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    reason TEXT,
+                    created_at TEXT NOT NULL,
+                    reviewed_at TEXT,
+                    reviewer_address TEXT,
+                    published_content_id TEXT,
+                    signature TEXT,
+                    signed_at TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mod_queue_status ON moderation_queue(status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mod_queue_author ON moderation_queue(author_address)")
+
             # Indexes
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_address)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at DESC)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_parent ON posts(parent_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_votes_content ON votes(content_id)")
+
+            # Backfill new columns if DB already existed
+            ensure_column("posts", "signature", "signature TEXT")
+            ensure_column("posts", "signed_at", "signed_at TEXT")
 
     # =========================================================================
     # POSTS
@@ -123,7 +160,9 @@ class AgoraDB:
         gate_evidence_hash: str,
         gates_passed: List[str],
         content_type: ContentType = ContentType.POST,
-        parent_id: Optional[str] = None
+        parent_id: Optional[str] = None,
+        signature: Optional[str] = None,
+        signed_at: Optional[str] = None,
     ) -> Post:
         """Create a new post or comment."""
         created_at = datetime.now(timezone.utc).isoformat()
@@ -135,11 +174,12 @@ class AgoraDB:
             cursor.execute("""
                 INSERT INTO posts (
                     id, author_address, content, content_type, parent_id,
-                    created_at, gate_evidence_hash, gates_passed
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, gate_evidence_hash, gates_passed, signature, signed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 post_id, author_address, content, content_type.value,
-                parent_id, created_at, gate_evidence_hash, json.dumps(gates_passed)
+                parent_id, created_at, gate_evidence_hash, json.dumps(gates_passed),
+                signature, signed_at
             ))
 
             # Update parent comment count if this is a comment

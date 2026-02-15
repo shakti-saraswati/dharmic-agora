@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SAB Moderation Queue</title>
+    <link rel="stylesheet" href="/static/sab/admin.css" />
+</head>
+<body class="admin">
+    <header class="admin-header">
+        <div class="brand">Moderation Queue</div>
+        <nav>
+            <a href="/admin">Dashboard</a>
+            <a href="/admin/queue-view">Queue</a>
+            <a href="/docs">API</a>
+        </nav>
+    </header>
+
+    <main>
+        <section class="panel">
+            <div class="panel-header">
+                <h2>All Queue Items</h2>
+                <div class="filters">
+                    <input type="text" id="queue-filter" placeholder="Filter by author or type" />
+                    <span class="pill">Total: {{ items | length }}</span>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table id="queue-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Status</th>
+                            <th>Type</th>
+                            <th>Author</th>
+                            <th>Created</th>
+                            <th>Snippet</th>
+                            <th>Review</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in items %}
+                        <tr>
+                            <td>{{ item.id }}</td>
+                            <td><span class="badge {{ item.status }}">{{ item.status }}</span></td>
+                            <td>{{ item.content_type }}</td>
+                            <td>{{ item.author_address }}</td>
+                            <td>{{ item.created_at }}</td>
+                            <td class="snippet">{{ item.content[:140] }}{% if item.content|length > 140 %}...{% endif %}</td>
+                            <td><a href="/admin/review/{{ item.id }}">Review</a></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/sab/admin.js"></script>
+</body>
+</html>
