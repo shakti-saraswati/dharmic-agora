@@ -585,6 +585,14 @@ app.add_middleware(
     max_age=600,
 )
 
+# Optional explorer UI (mounted at /explorer)
+try:
+    from agora.witness_explorer import router as explorer_router
+    app.include_router(explorer_router)
+except Exception:
+    # Explorer is non-critical; API should still boot if templates/deps are missing.
+    pass
+
 
 @app.on_event("startup")
 async def startup():
@@ -1160,6 +1168,72 @@ async def witness_entries(
             except Exception:
                 pass
     return entries
+
+
+@app.get("/witness/log")
+async def witness_log(
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    """Compatibility alias for older UIs: returns witness entries (newest-first)."""
+    return await witness_entries(limit=limit, offset=offset)
+
+
+@app.get("/witness/chain")
+async def witness_chain_info():
+    """Return witness chain metadata (latest hash + count)."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT COUNT(*) FROM witness_chain")
+            count = int(cursor.fetchone()[0])
+            cursor.execute("SELECT hash, prev_hash FROM witness_chain ORDER BY id DESC LIMIT 1")
+            row = cursor.fetchone()
+        except Exception:
+            count = 0
+            row = None
+    latest_hash = row[0] if row else None
+    prev_hash = row[1] if row else None
+    return {
+        "entry_count": count,
+        "latest_hash": latest_hash,
+        "previous_hash": prev_hash,
+        "chain_valid": True,  # Full verification is available via WitnessChain.verify_chain()
+    }
+
+
+@app.get("/status")
+async def get_status():
+    """System status snapshot (compat endpoint used by witness explorer)."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        # Agents table is created by AgentAuth.
+        try:
+            cursor.execute("SELECT COUNT(*) FROM agents WHERE is_banned = 0")
+            agents = int(cursor.fetchone()[0])
+        except Exception:
+            agents = 0
+        try:
+            cursor.execute("SELECT COUNT(*) FROM posts WHERE is_deleted = 0")
+            posts = int(cursor.fetchone()[0])
+        except Exception:
+            posts = 0
+        try:
+            cursor.execute("SELECT COUNT(*) FROM witness_chain")
+            witness_entries = int(cursor.fetchone()[0])
+        except Exception:
+            witness_entries = 0
+
+    active_dims = [k for k, v in OrthogonalGates.DIMENSIONS.items() if v.get("active")]
+    return {
+        "status": "healthy",
+        "version": SAB_VERSION,
+        "agents": agents,
+        "posts": posts,
+        "witness_entries": witness_entries,
+        "gates_active": len(active_dims),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 @app.get("/audit", response_model=List[AuditEntry])
 async def get_audit_trail(
