@@ -15,7 +15,7 @@ import os
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from swarm import systemic_monitor
 from swarm.skill_registry import verify_registry

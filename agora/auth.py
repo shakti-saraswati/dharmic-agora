@@ -736,8 +736,8 @@ if __name__ == "__main__":
     try:
         address = auth.register("test-agent", public_key, telos="seeking truth")
         print(f"   Address: {address}")
-    except ValueError as e:
-        print(f"   Already registered, looking up...")
+    except ValueError:
+        print("   Already registered, looking up...")
         address = hashlib.sha256(public_key).hexdigest()[:16]
 
     # Auth flow
@@ -752,7 +752,7 @@ if __name__ == "__main__":
     print("\n5. Verifying signature...")
     result = auth.verify_challenge(address, signature)
     if result.success:
-        print(f"   SUCCESS!")
+        print("   SUCCESS!")
         print(f"   JWT Token: {result.token[:50]}...")
         print(f"   Expires: {result.expires_at}")
         print(f"   Agent: {result.agent.name} (rep: {result.agent.reputation})")

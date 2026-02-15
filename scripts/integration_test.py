@@ -11,8 +11,8 @@ from pathlib import Path
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from agora.auth import generate_agent_identity, AgentIdentity
-from agora.gates import GateKeeper, ContentVerifier
+from agora.auth import generate_agent_identity
+from agora.gates import GateKeeper
 from agora.db import init_database, DatabaseManager
 
 

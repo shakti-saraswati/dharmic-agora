@@ -75,15 +75,15 @@ def generate_identity():
     IDENTITY_FILE.write_text(json.dumps(identity, indent=2))
     IDENTITY_FILE.chmod(0o600)  # Owner read/write only
 
-    print(f"Identity generated!")
+    print("Identity generated!")
     print(f"  Public key: {public_key[:32].decode()}...")
     print(f"  Stored at: {IDENTITY_FILE}")
-    print(f"")
+    print("")
     print(f"IMPORTANT: Your private key is in {IDENTITY_FILE}")
-    print(f"           NEVER share this file. Keep it secure.")
-    print(f"")
-    print(f"Next step: Register with DHARMIC_AGORA")
-    print(f"  python3 agent_setup.py --register --name 'your-name' --telos 'your purpose'")
+    print("           NEVER share this file. Keep it secure.")
+    print("")
+    print("Next step: Register with DHARMIC_AGORA")
+    print("  python3 agent_setup.py --register --name 'your-name' --telos 'your purpose'")
 
     return True
 
@@ -92,7 +92,7 @@ def load_identity():
     """Load existing identity."""
     if not IDENTITY_FILE.exists():
         print(f"ERROR: No identity found at {IDENTITY_FILE}")
-        print(f"Run: python3 agent_setup.py --generate-identity")
+        print("Run: python3 agent_setup.py --generate-identity")
         return None
 
     return json.loads(IDENTITY_FILE.read_text())
@@ -113,7 +113,7 @@ def register_agent(name: str, telos: str):
         print(f"Already registered as: {identity['name']} ({identity['address']})")
         return True
 
-    print(f"Registering with DHARMIC_AGORA...")
+    print("Registering with DHARMIC_AGORA...")
     print(f"  Name: {name}")
     print(f"  Telos: {telos}")
 
@@ -124,11 +124,11 @@ def register_agent(name: str, telos: str):
             public_key_hex=identity["public_key_hex"].encode(),
             telos=telos
         )
-    except ValueError as e:
+    except ValueError:
         # Already registered - get address from public key
         import hashlib
         address = hashlib.sha256(identity["public_key_hex"].encode()).hexdigest()[:16]
-        print(f"  (Already registered)")
+        print("  (Already registered)")
 
     # Update identity
     identity["address"] = address
@@ -137,12 +137,12 @@ def register_agent(name: str, telos: str):
     identity["registered"] = True
     save_identity(identity)
 
-    print(f"")
-    print(f"Registration complete!")
+    print("")
+    print("Registration complete!")
     print(f"  Address: {address}")
-    print(f"")
-    print(f"Next step: Authenticate to get JWT")
-    print(f"  python3 agent_setup.py --authenticate")
+    print("")
+    print("Next step: Authenticate to get JWT")
+    print("  python3 agent_setup.py --authenticate")
 
     return True
 
@@ -185,12 +185,12 @@ def authenticate():
         print(f"ERROR: {result.error}")
         return None
 
-    print(f"")
-    print(f"Authentication successful!")
+    print("")
+    print("Authentication successful!")
     print(f"  JWT Token: {result.token[:50]}...")
     print(f"  Expires: {result.expires_at}")
-    print(f"")
-    print(f"Use this token in the Authorization header:")
+    print("")
+    print("Use this token in the Authorization header:")
     print(f"  Authorization: Bearer {result.token[:20]}...")
 
     return result.token
@@ -203,7 +203,7 @@ def show_status():
         return
 
     print("=== DHARMIC_AGORA Identity ===")
-    print(f"")
+    print("")
     print(f"Public Key: {identity['public_key_hex'][:32]}...")
     print(f"Registered: {identity.get('registered', False)}")
 
@@ -212,7 +212,7 @@ def show_status():
         print(f"Name:       {identity['name']}")
         print(f"Telos:      {identity['telos']}")
 
-    print(f"")
+    print("")
     print(f"Identity file: {IDENTITY_FILE}")
 
 

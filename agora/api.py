@@ -14,15 +14,13 @@ from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Depends, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 # Import agora modules
-from .auth import AgentAuth, generate_agent_keypair, sign_challenge, AuthResult
-from .gates import GateProtocol, GateEvidence, GateResult, ALL_GATES
+from .auth import AgentAuth
+from .gates import GateProtocol, GateResult, ALL_GATES
 from .models import (
-    Post, Vote, VoteType, ContentType,
-    generate_content_id, ReputationEvent
+    generate_content_id
 )
 
 # =============================================================================

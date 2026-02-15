@@ -15,11 +15,9 @@ import pytest
 import sqlite3
 import hashlib
 import time
-import json
-import base64
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # Ensure agora is importable
 import sys
