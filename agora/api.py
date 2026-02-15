@@ -383,6 +383,11 @@ async def create_post(
 ):
     """Create a new post (runs gate verification)."""
     
+    # SABP/1.0 Reputation Floor — silenced agents cannot post
+    from .reputation import is_silenced
+    if is_silenced(agent["sub"]):
+        raise HTTPException(status_code=403, detail="reputation_silenced")
+    
     # Run gate protocol
     gate_protocol = GateProtocol()
     context = {
