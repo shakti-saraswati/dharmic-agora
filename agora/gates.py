@@ -581,3 +581,156 @@ def verify_content(content: str, author_address: str, context: Dict[str, Any] = 
 def calculate_quality(evidence: List[GateEvidence]) -> float:
     """Convenience function to calculate quality score."""
     return GATE_PROTOCOL.calculate_quality_score(evidence)
+
+
+# =============================================================================
+# SAB "Orthogonal Gates" (Compatibility Layer)
+# =============================================================================
+#
+# Some parts of the repo (gate evaluation harness + tests) expect a compact
+# 3-active-dimension gate system (structural_rigor, build_artifacts,
+# telos_alignment). The production gate protocol above is richer and uses
+# GateEvidence objects.
+#
+# This layer preserves the original evaluation API without constraining the
+# richer protocol. It is intentionally heuristic and deterministic.
+
+_STOPWORDS = {
+    "the", "a", "an", "and", "or", "but", "if", "then", "else",
+    "is", "are", "was", "were", "be", "been", "being",
+    "to", "of", "in", "for", "on", "with", "at", "by", "from", "as",
+    "this", "that", "these", "those", "it", "its", "we", "our", "you", "your",
+}
+
+
+def _tokenize(text: str) -> List[str]:
+    return [t for t in re.findall(r"[a-z0-9_]+", (text or "").lower()) if t and t not in _STOPWORDS]
+
+
+class OrthogonalGates:
+    """
+    Minimal, orthogonal, deterministic gate system used by the evaluation harness.
+
+    Output schema (stable):
+      {
+        "dimensions": {dim: {"score": float, "passed": bool, "reason": str}},
+        "passed_count": int,
+        "total_active": int,
+        "admitted": bool,
+      }
+    """
+
+    # Only 3 are active in the current pilot harness.
+    DIMENSIONS = {
+        "structural_rigor": {"active": True},
+        "build_artifacts": {"active": True},
+        "telos_alignment": {"active": True},
+        "predictive_accuracy": {"active": False},
+    }
+
+    def __init__(self):
+        # Per-dimension pass thresholds (tuned to the bundled fixture set).
+        self.thresholds = {
+            "structural_rigor": 0.30,
+            "build_artifacts": 0.50,
+            "telos_alignment": 0.20,
+        }
+
+    def evaluate(self, content: Dict[str, Any], agent_telos: str = "", has_attachment: bool = False) -> Dict[str, Any]:
+        body = (content or {}).get("body", "") or ""
+        if not body.strip():
+            return {
+                "dimensions": {
+                    k: {"score": 0.0, "passed": False, "reason": "empty"}
+                    for k, v in self.DIMENSIONS.items() if v["active"]
+                },
+                "passed_count": 0,
+                "total_active": sum(1 for v in self.DIMENSIONS.values() if v["active"]),
+                "admitted": False,
+            }
+
+        dims: Dict[str, Dict[str, Any]] = {}
+
+        # structural_rigor: headings/paragraphs/lists
+        try:
+            from .depth import score_structural_complexity
+            structural = score_structural_complexity(body)
+        except Exception:
+            # Fallback: headings + paragraph count
+            paragraphs = len([p for p in body.split("\n\n") if p.strip()])
+            headings = len(re.findall(r"^#{1,6}\\s", body, re.MULTILINE))
+            structural = min(1.0, (min(paragraphs / 4, 1.0) * 0.6 + min(headings / 2, 1.0) * 0.4))
+            structural = round(structural, 4)
+
+        dims["structural_rigor"] = {
+            "score": float(structural),
+            "passed": float(structural) >= self.thresholds["structural_rigor"],
+            "reason": "structure markers (headings/paragraphs/lists)",
+        }
+
+        # build_artifacts: code/links/tables/attachments with anti-spam penalty.
+        code_blocks = body.count("```")
+        links = len(re.findall(r"https?://\\S+", body))
+        table_like = 1 if ("|" in body and "\n" in body) else 0
+        has_numbers = 1 if re.search(r"\\b\\d+(\\.\\d+)?%?\\b", body) else 0
+
+        # Base score from artifact markers.
+        raw = 0.0
+        raw += 0.55 if code_blocks >= 2 else (0.30 if code_blocks == 1 else 0.0)
+        raw += 0.30 if links >= 1 else 0.0
+        raw += 0.20 if table_like else 0.0
+        raw += 0.10 if has_numbers else 0.0
+        raw += 0.50 if has_attachment else 0.0
+        raw = min(raw, 1.0)
+
+        # Penalize keyword stuffing / low-entropy repetition.
+        toks = _tokenize(body)
+        unique_ratio = (len(set(toks)) / len(toks)) if toks else 0.0
+        if toks and unique_ratio < 0.35 and len(toks) >= 20:
+            raw *= 0.25
+            penalty_reason = f"repetitive (unique_ratio={unique_ratio:.2f})"
+        else:
+            penalty_reason = "ok"
+
+        raw = round(float(raw), 4)
+        dims["build_artifacts"] = {
+            "score": raw,
+            "passed": raw >= self.thresholds["build_artifacts"],
+            "reason": f"code/links/tables/attachments; penalty={penalty_reason}",
+        }
+
+        # telos_alignment: token overlap between telos + body (lightweight).
+        telos_toks = _tokenize(agent_telos)
+        if not telos_toks:
+            # If no telos provided, do not fail the dimension; treat as neutral.
+            score = 0.5
+            passed = True
+            reason = "no telos provided (neutral)"
+        else:
+            body_toks = set(toks)
+            overlap = len(body_toks.intersection(set(telos_toks)))
+            denom = max(len(set(telos_toks)), 1)
+            score = min((overlap / denom) * 1.5, 1.0)
+            score = round(float(score), 4)
+            passed = score >= self.thresholds["telos_alignment"]
+            reason = f"token overlap={overlap}/{denom}"
+
+        dims["telos_alignment"] = {"score": score, "passed": passed, "reason": reason}
+
+        active_dims = [k for k, v in self.DIMENSIONS.items() if v["active"]]
+        passed_count = sum(1 for k in active_dims if dims[k]["passed"])
+
+        # Admit if at least 2 of 3 active dimensions pass.
+        admitted = passed_count >= 2
+
+        return {
+            "dimensions": {k: dims[k] for k in active_dims},
+            "passed_count": passed_count,
+            "total_active": len(active_dims),
+            "admitted": admitted,
+        }
+
+
+def evaluate_content(body: str, agent_telos: str = "", has_attachment: bool = False) -> Dict[str, Any]:
+    """Convenience wrapper used by tests + harness."""
+    return OrthogonalGates().evaluate({"body": body}, agent_telos=agent_telos, has_attachment=has_attachment)

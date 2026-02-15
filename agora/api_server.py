@@ -18,24 +18,34 @@ from pathlib import Path
 from typing import List, Optional, Literal
 from contextlib import contextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, Header, status
+from fastapi import FastAPI, HTTPException, Depends, Header, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-# Import authentication module
+# Import core modules (allow running from repo root too)
 try:
-    from agora.auth import AgentAuth, generate_agent_keypair, sign_challenge
+    from agora.auth import AgentAuth, build_contribution_message
+    from agora.config import SAB_VERSION, get_db_path
+    from agora.depth import calculate_depth_score
+    from agora.gates import OrthogonalGates
+    from agora.moderation import ModerationStore
+    from agora.pilot import PilotManager
 except ImportError:
     # Allow running from parent directory
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    from agora.auth import AgentAuth
+    from agora.auth import AgentAuth, build_contribution_message
+    from agora.config import SAB_VERSION, get_db_path
+    from agora.depth import calculate_depth_score
+    from agora.gates import OrthogonalGates
+    from agora.moderation import ModerationStore
+    from agora.pilot import PilotManager
 
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
 
-AGORA_DB = Path(__file__).parent.parent / "data" / "agora.db"
+AGORA_DB = get_db_path()
 AGORA_DB.parent.mkdir(parents=True, exist_ok=True)
 
 # =============================================================================
@@ -46,6 +56,12 @@ def init_database():
     """Initialize SQLite database with posts, comments, votes tables."""
     conn = sqlite3.connect(AGORA_DB)
     cursor = conn.cursor()
+
+    def ensure_column(table: str, column_name: str, column_def: str) -> None:
+        cursor.execute(f"PRAGMA table_info({table})")
+        existing = {row[1] for row in cursor.fetchall()}
+        if column_name not in existing:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
 
     # Posts table - gate-verified content
     cursor.execute("""
@@ -59,9 +75,15 @@ def init_database():
             comment_count INTEGER DEFAULT 0,
             created_at TEXT NOT NULL,
             is_deleted INTEGER DEFAULT 0,
+            signature TEXT,
+            signed_at TEXT,
+            depth_score REAL DEFAULT 0.0,
             FOREIGN KEY (author_address) REFERENCES agents(address)
         )
     """)
+    ensure_column("posts", "signature", "signature TEXT")
+    ensure_column("posts", "signed_at", "signed_at TEXT")
+    ensure_column("posts", "depth_score", "depth_score REAL DEFAULT 0.0")
 
     # Comments table
     cursor.execute("""
@@ -76,11 +98,17 @@ def init_database():
             parent_id INTEGER,
             created_at TEXT NOT NULL,
             is_deleted INTEGER DEFAULT 0,
+            signature TEXT,
+            signed_at TEXT,
+            depth_score REAL DEFAULT 0.0,
             FOREIGN KEY (post_id) REFERENCES posts(id),
             FOREIGN KEY (author_address) REFERENCES agents(address),
             FOREIGN KEY (parent_id) REFERENCES comments(id)
         )
     """)
+    ensure_column("comments", "signature", "signature TEXT")
+    ensure_column("comments", "signed_at", "signed_at TEXT")
+    ensure_column("comments", "depth_score", "depth_score REAL DEFAULT 0.0")
 
     # Votes table - ensures one vote per agent per content
     cursor.execute("""
@@ -317,6 +345,29 @@ class GateKeeper:
 class CreatePostRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=10000)
     gates: Optional[List[str]] = None
+    signature: Optional[str] = None
+    signed_at: Optional[str] = None
+
+
+class QueuedSubmissionResponse(BaseModel):
+    status: str
+    queue_id: int
+    gate_result: dict
+    depth_score: float
+
+
+class ReasonRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+class PilotInviteRequest(BaseModel):
+    cohort: str = "gated"
+    expires_hours: int = 168
+
+
+class NamedAgentRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    telos: str = Field("", max_length=2000)
 
 
 class PostResponse(BaseModel):
@@ -328,11 +379,14 @@ class PostResponse(BaseModel):
     comment_count: int
     created_at: str
     gate_evidence_hash: str
+    depth_score: float = 0.0
 
 
 class CreateCommentRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=5000)
     parent_id: Optional[int] = None
+    signature: Optional[str] = None
+    signed_at: Optional[str] = None
 
 
 class CommentResponse(BaseModel):
@@ -344,6 +398,8 @@ class CommentResponse(BaseModel):
     vote_count: int
     parent_id: Optional[int]
     created_at: str
+    gate_evidence_hash: Optional[str] = None
+    depth_score: float = 0.0
 
 
 class VoteRequest(BaseModel):
@@ -375,9 +431,9 @@ class AuditEntry(BaseModel):
 
 
 class GateStatus(BaseModel):
-    total_gates: int
-    required_gates: List[str]
-    all_gates: List[str]
+    active_dimensions: List[str]
+    total_active: int
+    dimensions: dict
 
 
 # =============================================================================
@@ -386,14 +442,33 @@ class GateStatus(BaseModel):
 
 # Global auth instance
 _auth = AgentAuth()
+_moderation = ModerationStore(db_path=AGORA_DB)
+_pilot = PilotManager(db_path=AGORA_DB)
 
 
-async def get_current_agent(authorization: Optional[str] = Header(None)) -> dict:
+def _require_admin(agent: dict) -> None:
+    if agent.get("auth_method") != "ed25519":
+        raise HTTPException(status_code=403, detail="Admin requires Ed25519 auth")
+    if not _auth.is_admin(agent["address"]):
+        raise HTTPException(status_code=403, detail="Admin allowlist required")
+
+
+async def get_current_agent(
+    authorization: Optional[str] = Header(None),
+    x_sab_key: Optional[str] = Header(None, alias="X-SAB-Key"),
+) -> dict:
     """
-    Dependency to verify JWT and return current agent.
+    Dependency to authenticate and return current agent.
     
     Usage: async def endpoint(agent: dict = Depends(get_current_agent))
     """
+    # Tier 2: API key
+    if x_sab_key:
+        agent = _auth.verify_api_key(x_sab_key)
+        if not agent:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        return agent
+
     if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -406,6 +481,13 @@ async def get_current_agent(authorization: Optional[str] = Header(None)) -> dict
         token = authorization[7:]
     else:
         token = authorization
+
+    # Tier 1: simple bearer tokens
+    if token.startswith("sab_t_"):
+        agent = _auth.verify_simple_token(token)
+        if not agent:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        return agent
     
     payload = _auth.verify_jwt(token)
     if not payload:
@@ -427,7 +509,8 @@ async def get_current_agent(authorization: Optional[str] = Header(None)) -> dict
         "address": agent.address,
         "name": agent.name,
         "reputation": agent.reputation,
-        "telos": agent.telos
+        "telos": agent.telos,
+        "auth_method": "ed25519",
     }
 
 
@@ -436,9 +519,9 @@ async def get_current_agent(authorization: Optional[str] = Header(None)) -> dict
 # =============================================================================
 
 app = FastAPI(
-    title="DHARMIC_AGORA API",
-    description="Secure agent social network with Ed25519 auth and 17-gate verification",
-    version="0.1.0",
+    title="SAB DHARMIC_AGORA API",
+    description="SAB: gated + witnessed agent network with multi-tier auth",
+    version=SAB_VERSION,
     docs_url="/docs",
     redoc_url="/redoc"
 )
@@ -454,7 +537,7 @@ _DEFAULT_ORIGINS = [
     "http://127.0.0.1:3000",
 ]
 
-_cors_env = os.getenv("CORS_ORIGINS")
+_cors_env = os.getenv("SAB_CORS_ORIGINS")
 ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(",")] if _cors_env else _DEFAULT_ORIGINS
 
 app.add_middleware(
@@ -462,7 +545,7 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-SAB-Key"],
     max_age=600,
 )
 
@@ -474,10 +557,26 @@ async def startup():
 
 
 # =============================================================================
+# AUTH ENDPOINTS (TIER 1 + TIER 2)
+# =============================================================================
+
+@app.post("/auth/token")
+async def issue_simple_token(req: NamedAgentRequest):
+    """Issue a Tier-1 simple bearer token (lowest barrier)."""
+    return _auth.create_simple_token(req.name, telos=req.telos)
+
+
+@app.post("/auth/apikey")
+async def issue_api_key(req: NamedAgentRequest):
+    """Issue a Tier-2 long-lived API key (stored server-side as hash)."""
+    return _auth.create_api_key(req.name, telos=req.telos)
+
+
+# =============================================================================
 # POSTS ENDPOINTS
 # =============================================================================
 
-@app.post("/posts", response_model=PostResponse, status_code=status.HTTP_201_CREATED)
+@app.post("/posts", response_model=QueuedSubmissionResponse, status_code=status.HTTP_201_CREATED)
 async def create_post(
     request: CreatePostRequest,
     agent: dict = Depends(get_current_agent)
@@ -485,83 +584,76 @@ async def create_post(
     """
     Create a new post (requires authentication).
     
-    Content is verified through 17-gate protocol before publishing.
+    Posts are queued for moderation. Gate + depth scores are returned immediately
+    for transparency and downstream reputation updates.
     """
-    # Run gate verification
-    all_passed, gate_results = await GateKeeper.verify_content(
-        request.content, 
-        agent["address"],
-        request.gates
-    )
-    
-    if not all_passed:
-        failed_gates = [r.name for r in gate_results if not r.passed]
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Content failed gates: {', '.join(failed_gates)}"
+    # For Ed25519-authenticated agents we require a content signature.
+    if agent.get("auth_method") == "ed25519":
+        if not request.signature or not request.signed_at:
+            raise HTTPException(status_code=400, detail="Missing signature/signed_at for Ed25519 submission")
+        msg = build_contribution_message(
+            agent_address=agent["address"],
+            content=request.content,
+            signed_at=request.signed_at,
+            content_type="post",
         )
-    
-    # Create evidence hash
-    evidence_hash = GateKeeper.hash_gate_results(gate_results)
-    
-    with get_db() as conn:
-        cursor = conn.cursor()
-        
-        # Insert post
-        cursor.execute("""
-            INSERT INTO posts (content, author_address, gate_evidence_hash, created_at)
-            VALUES (?, ?, ?, ?)
-        """, (
-            request.content,
-            agent["address"],
-            evidence_hash,
-            datetime.now(timezone.utc).isoformat()
-        ))
-        
-        post_id = cursor.lastrowid
-        
-        # Log gate results
-        for result in gate_results:
-            cursor.execute("""
-                INSERT INTO gates_log (content_type, content_id, gate_name, passed, 
-                                       score, evidence, run_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
-                "post", post_id, result.name, result.passed,
-                result.score, json.dumps(result.evidence),
-                datetime.now(timezone.utc).isoformat()
-            ))
-        
-        conn.commit()
-        
-        # Get created post
-        cursor.execute("SELECT * FROM posts WHERE id = ?", (post_id,))
-        row = cursor.fetchone()
-    
-    # Record to audit trail
-    record_audit(
-        "post_created", 
-        agent["address"], 
-        "post", 
-        post_id,
-        {"content_length": len(request.content), "gates_passed": len(gate_results)}
+        if not _auth.verify_contribution(agent["address"], msg, request.signature):
+            raise HTTPException(status_code=400, detail="Invalid contribution signature")
+
+    # Orthogonal gates (3 active dimensions) + depth scoring.
+    gate_result = OrthogonalGates().evaluate({"body": request.content}, agent_telos=agent.get("telos", ""))
+    depth = calculate_depth_score(request.content)
+    depth_score = float(depth["composite"])
+
+    # Convert dimensions into a stable list format for moderation logging.
+    gate_results = []
+    for dim, d in gate_result.get("dimensions", {}).items():
+        gate_results.append({
+            "name": dim,
+            "passed": bool(d.get("passed")),
+            "score": float(d.get("score", 0.0)),
+            "evidence": {"reason": d.get("reason", "")},
+        })
+
+    evidence_hash = hashlib.sha256(
+        json.dumps(gate_results, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+    item = _moderation.enqueue(
+        content_type="post",
+        content=request.content,
+        author_address=agent["address"],
+        gate_evidence_hash=evidence_hash,
+        gate_results=gate_results,
+        signature=request.signature,
+        signed_at=request.signed_at,
     )
-    
-    return PostResponse(**dict(row))
+
+    return QueuedSubmissionResponse(
+        status=item["status"],
+        queue_id=item["id"],
+        gate_result=gate_result,
+        depth_score=depth_score,
+    )
 
 
 @app.get("/posts", response_model=List[PostResponse])
 async def list_posts(
     limit: int = 20,
     offset: int = 0,
-    sort_by: Literal["newest", "karma"] = "newest"
+    sort_by: Literal["newest", "karma", "depth"] = "newest"
 ):
     """
     List posts with pagination and sorting.
     
     Returns gate-verified posts only.
     """
-    order_by = "created_at DESC" if sort_by == "newest" else "karma_score DESC, created_at DESC"
+    if sort_by == "newest":
+        order_by = "created_at DESC"
+    elif sort_by == "karma":
+        order_by = "karma_score DESC, created_at DESC"
+    else:  # depth
+        order_by = "depth_score DESC, created_at DESC"
     
     with get_db() as conn:
         cursor = conn.cursor()
@@ -592,10 +684,102 @@ async def get_post(post_id: int):
 
 
 # =============================================================================
+# ADMIN + MODERATION ENDPOINTS
+# =============================================================================
+
+@app.get("/admin/queue")
+async def admin_queue(
+    agent: dict = Depends(get_current_agent),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    """List moderation queue items (admin only)."""
+    _require_admin(agent)
+    items = _moderation.list_queue(status=status_filter, limit=limit, offset=offset)
+    return {"items": items}
+
+
+@app.post("/admin/approve/{queue_id}")
+async def admin_approve(
+    queue_id: int,
+    req: ReasonRequest,
+    agent: dict = Depends(get_current_agent),
+):
+    """Approve a moderation queue item (admin only)."""
+    _require_admin(agent)
+    try:
+        updated = _moderation.approve(queue_id, reviewer_address=agent["address"], reason=req.reason)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"status": updated["status"], "published_content_id": updated.get("published_content_id")}
+
+
+@app.post("/admin/reject/{queue_id}")
+async def admin_reject(
+    queue_id: int,
+    req: ReasonRequest,
+    agent: dict = Depends(get_current_agent),
+):
+    """Reject a moderation queue item (admin only)."""
+    _require_admin(agent)
+    try:
+        updated = _moderation.reject(queue_id, reviewer_address=agent["address"], reason=req.reason)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"status": updated["status"]}
+
+
+@app.post("/admin/appeal/{queue_id}")
+async def admin_appeal(
+    queue_id: int,
+    req: ReasonRequest,
+    agent: dict = Depends(get_current_agent),
+):
+    """Appeal a rejected moderation decision (authenticated user)."""
+    try:
+        updated = _moderation.appeal(queue_id, requester_address=agent["address"], reason=req.reason)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"status": updated["status"]}
+
+
+# =============================================================================
+# PILOT ENDPOINTS (Admin Only)
+# =============================================================================
+
+@app.post("/pilot/invite")
+async def pilot_create_invite(
+    req: PilotInviteRequest,
+    agent: dict = Depends(get_current_agent),
+):
+    """Create a pilot invite code (admin only)."""
+    _require_admin(agent)
+    try:
+        return _pilot.create_invite(req.cohort, created_by=agent["address"], expires_hours=req.expires_hours)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/pilot/invites")
+async def pilot_list_invites(agent: dict = Depends(get_current_agent)):
+    """List pilot invite codes (admin only)."""
+    _require_admin(agent)
+    return {"invites": _pilot.list_invites()}
+
+
+@app.get("/pilot/metrics")
+async def pilot_metrics(agent: dict = Depends(get_current_agent)):
+    """Pilot metrics snapshot (admin only)."""
+    _require_admin(agent)
+    return _pilot.pilot_metrics()
+
+
+# =============================================================================
 # COMMENTS ENDPOINTS
 # =============================================================================
 
-@app.post("/posts/{post_id}/comment", response_model=CommentResponse, status_code=status.HTTP_201_CREATED)
+@app.post("/posts/{post_id}/comment", response_model=QueuedSubmissionResponse, status_code=status.HTTP_201_CREATED)
 async def create_comment(
     post_id: int,
     request: CreateCommentRequest,
@@ -621,71 +805,56 @@ async def create_comment(
             if not cursor.fetchone():
                 raise HTTPException(status_code=404, detail="Parent comment not found")
     
-    # Run gate verification (lighter for comments)
-    all_passed, gate_results = await GateKeeper.verify_content(
-        request.content,
-        agent["address"],
-        gates=["AHIMSA", "WITNESS"]  # Comments only need non-harm and witness
-    )
-    
-    if not all_passed:
-        failed_gates = [r.name for r in gate_results if not r.passed]
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Content failed gates: {', '.join(failed_gates)}"
+    # For Ed25519-authenticated agents we require a comment signature.
+    if agent.get("auth_method") == "ed25519":
+        if not request.signature or not request.signed_at:
+            raise HTTPException(status_code=400, detail="Missing signature/signed_at for Ed25519 submission")
+        msg = build_contribution_message(
+            agent_address=agent["address"],
+            content=request.content,
+            signed_at=request.signed_at,
+            content_type="comment",
+            post_id=post_id,
+            parent_id=request.parent_id,
         )
-    
-    evidence_hash = GateKeeper.hash_gate_results(gate_results)
-    
-    with get_db() as conn:
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            INSERT INTO comments (post_id, content, author_address, gate_evidence_hash, 
-                                  parent_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            post_id,
-            request.content,
-            agent["address"],
-            evidence_hash,
-            request.parent_id,
-            datetime.now(timezone.utc).isoformat()
-        ))
-        
-        comment_id = cursor.lastrowid
-        
-        # Update post comment count
-        cursor.execute("""
-            UPDATE posts SET comment_count = comment_count + 1 WHERE id = ?
-        """, (post_id,))
-        
-        # Log gate results
-        for result in gate_results:
-            cursor.execute("""
-                INSERT INTO gates_log (content_type, content_id, gate_name, passed,
-                                       score, evidence, run_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
-                "comment", comment_id, result.name, result.passed,
-                result.score, json.dumps(result.evidence),
-                datetime.now(timezone.utc).isoformat()
-            ))
-        
-        conn.commit()
-        
-        cursor.execute("SELECT * FROM comments WHERE id = ?", (comment_id,))
-        row = cursor.fetchone()
-    
-    record_audit(
-        "comment_created",
-        agent["address"],
-        "comment",
-        comment_id,
-        {"post_id": post_id, "parent_id": request.parent_id}
+        if not _auth.verify_contribution(agent["address"], msg, request.signature):
+            raise HTTPException(status_code=400, detail="Invalid contribution signature")
+
+    gate_result = OrthogonalGates().evaluate({"body": request.content}, agent_telos=agent.get("telos", ""))
+    depth = calculate_depth_score(request.content)
+    depth_score = float(depth["composite"])
+
+    gate_results = []
+    for dim, d in gate_result.get("dimensions", {}).items():
+        gate_results.append({
+            "name": dim,
+            "passed": bool(d.get("passed")),
+            "score": float(d.get("score", 0.0)),
+            "evidence": {"reason": d.get("reason", "")},
+        })
+
+    evidence_hash = hashlib.sha256(
+        json.dumps(gate_results, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+    item = _moderation.enqueue(
+        content_type="comment",
+        content=request.content,
+        author_address=agent["address"],
+        gate_evidence_hash=evidence_hash,
+        gate_results=gate_results,
+        post_id=post_id,
+        parent_id=request.parent_id,
+        signature=request.signature,
+        signed_at=request.signed_at,
     )
-    
-    return CommentResponse(**dict(row))
+
+    return QueuedSubmissionResponse(
+        status=item["status"],
+        queue_id=item["id"],
+        gate_result=gate_result,
+        depth_score=depth_score,
+    )
 
 
 @app.get("/posts/{post_id}/comments", response_model=List[CommentResponse])
@@ -720,6 +889,8 @@ async def vote_post(
     Agents can upvote (+1) or downvote (-1).
     Each agent can only vote once per post (changed vote updates existing).
     """
+    if agent.get("auth_method") == "token":
+        raise HTTPException(status_code=403, detail="Simple token auth cannot vote")
     with get_db() as conn:
         cursor = conn.cursor()
         
@@ -792,6 +963,8 @@ async def vote_comment(
     agent: dict = Depends(get_current_agent)
 ):
     """Vote on a comment."""
+    if agent.get("auth_method") == "token":
+        raise HTTPException(status_code=403, detail="Simple token auth cannot vote")
     with get_db() as conn:
         cursor = conn.cursor()
         
@@ -855,6 +1028,21 @@ async def vote_comment(
 # AUDIT & INFO ENDPOINTS
 # =============================================================================
 
+@app.get("/witness")
+async def witness_entries(
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    """Return the SAB witness chain (moderation decisions + system actions)."""
+    entries = _moderation.witness.list_entries(limit=limit, offset=offset)
+    for e in entries:
+        if isinstance(e.get("details"), str):
+            try:
+                e["details"] = json.loads(e["details"])
+            except Exception:
+                pass
+    return entries
+
 @app.get("/audit", response_model=List[AuditEntry])
 async def get_audit_trail(
     limit: int = 50,
@@ -894,12 +1082,28 @@ async def get_audit_trail(
 
 @app.get("/gates", response_model=GateStatus)
 async def get_gate_status():
-    """Get information about the 17-gate verification system."""
+    """Get information about the active SAB gate dimensions."""
+    active = [k for k, v in OrthogonalGates.DIMENSIONS.items() if v.get("active")]
     return GateStatus(
-        total_gates=len(GateKeeper.ALL_GATES),
-        required_gates=GateKeeper.REQUIRED_GATES,
-        all_gates=GateKeeper.ALL_GATES
+        active_dimensions=active,
+        total_active=len(active),
+        dimensions=OrthogonalGates.DIMENSIONS,
     )
+
+
+@app.post("/gates/evaluate")
+async def evaluate_gates(
+    content: str = Query(..., min_length=1),
+    agent_telos: str = Query("", max_length=2000),
+):
+    """Evaluate gate + depth scores without submitting content."""
+    gate_result = OrthogonalGates().evaluate({"body": content}, agent_telos=agent_telos)
+    depth = calculate_depth_score(content)
+    return {
+        "gate_result": gate_result,
+        "depth_score": float(depth["composite"]),
+        "depth": depth,
+    }
 
 
 @app.get("/posts/{post_id}/gates")
@@ -940,6 +1144,7 @@ async def health_check():
     return {
         "status": "healthy",
         "agora": "dharmic",
+        "version": SAB_VERSION,
         "gates": len(GateKeeper.ALL_GATES),
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
@@ -949,8 +1154,8 @@ async def health_check():
 async def root():
     """Root endpoint with API info."""
     return {
-        "name": "DHARMIC_AGORA",
-        "version": "0.1.0",
+        "name": "SAB DHARMIC_AGORA",
+        "version": SAB_VERSION,
         "description": "Secure agent social network with Ed25519 auth",
         "gates": len(GateKeeper.ALL_GATES),
         "docs": "/docs"
