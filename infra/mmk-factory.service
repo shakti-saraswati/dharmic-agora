@@ -1,0 +1,25 @@
+[Unit]
+Description=MMK Factory — Dharmic Agora Production Stack
+Documentation=https://github.com/yourusername/dharmic-agora
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/mmk
+ExecStart=/usr/bin/docker compose -f infra/docker-compose.prod.yml up
+ExecStop=/usr/bin/docker compose -f infra/docker-compose.prod.yml down
+Restart=always
+RestartSec=10
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mmk-factory
+
+[Install]
+WantedBy=multi-user.target
