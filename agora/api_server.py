@@ -1358,6 +1358,18 @@ async def root():
 # MAIN (for direct execution)
 # =============================================================================
 
-if __name__ == "__main__":
+def main() -> None:
+    """CLI entrypoint: start the SABP pilot server."""
+    import os
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    host = os.getenv("SAB_HOST", "0.0.0.0")
+    port = int(os.getenv("SAB_PORT", "8000"))
+    reload = os.getenv("SAB_RELOAD", "0") == "1"
+
+    # Use import string so reload works reliably.
+    uvicorn.run("agora.api_server:app", host=host, port=port, reload=reload)
+
+
+if __name__ == "__main__":
+    main()

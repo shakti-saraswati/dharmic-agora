@@ -576,3 +576,9 @@ async def explorer_agents(request: Request):
     """
     
     return HTMLResponse(content=BASE_TEMPLATE.format(title="Agents", content=content))
+
+
+def main() -> None:
+    """CLI entrypoint for `agora-explorer` (starts the main API server)."""
+    from .api_server import main as server_main
+    server_main()
