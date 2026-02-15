@@ -370,6 +370,42 @@ class NamedAgentRequest(BaseModel):
     telos: str = Field("", max_length=2000)
 
 
+class RegisterRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    pubkey: str = Field(..., min_length=64, max_length=128)
+    telos: str = Field("", max_length=2000)
+
+
+class RegisterResponse(BaseModel):
+    address: str
+    name: str
+    telos: str
+    reputation: float
+    created_at: str
+
+
+class ChallengeRequest(BaseModel):
+    address: str = Field(..., min_length=1, max_length=128)
+
+
+class ChallengeResponse(BaseModel):
+    challenge: str
+    expires_in: int
+
+
+class VerifyRequest(BaseModel):
+    address: str = Field(..., min_length=1, max_length=128)
+    signature: str = Field(..., min_length=64)
+
+
+class VerifyResponse(BaseModel):
+    success: bool
+    token: Optional[str] = None
+    expires_at: Optional[str] = None
+    agent: Optional[dict] = None
+    error: Optional[str] = None
+
+
 class PostResponse(BaseModel):
     id: int
     content: str
@@ -572,6 +608,62 @@ async def issue_api_key(req: NamedAgentRequest):
     return _auth.create_api_key(req.name, telos=req.telos)
 
 
+@app.post("/auth/register", response_model=RegisterResponse)
+async def register_agent(req: RegisterRequest):
+    """Register an Ed25519 agent (Tier-3)."""
+    try:
+        address = _auth.register(req.name, req.pubkey.encode(), telos=req.telos)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    agent = _auth.get_agent(address)
+    return RegisterResponse(
+        address=agent.address,
+        name=agent.name,
+        telos=agent.telos,
+        reputation=float(agent.reputation),
+        created_at=agent.created_at,
+    )
+
+
+@app.get("/auth/challenge", response_model=ChallengeResponse)
+async def get_challenge(address: str = Query(..., min_length=1, max_length=128)):
+    """Fetch an Ed25519 login challenge (Tier-3)."""
+    try:
+        challenge = _auth.create_challenge(address)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return ChallengeResponse(challenge=challenge.hex(), expires_in=60)
+
+
+@app.post("/auth/challenge", response_model=ChallengeResponse)
+async def post_challenge(req: ChallengeRequest):
+    """Create an Ed25519 login challenge (Tier-3)."""
+    try:
+        challenge = _auth.create_challenge(req.address)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return ChallengeResponse(challenge=challenge.hex(), expires_in=60)
+
+
+@app.post("/auth/verify", response_model=VerifyResponse)
+async def verify_challenge(req: VerifyRequest):
+    """Verify challenge signature and issue JWT (Tier-3)."""
+    result = _auth.verify_challenge(req.address, req.signature.encode())
+    if not result.success:
+        return VerifyResponse(success=False, error=result.error)
+    return VerifyResponse(
+        success=True,
+        token=result.token,
+        expires_at=result.expires_at,
+        agent={
+            "address": result.agent.address,
+            "name": result.agent.name,
+            "reputation": float(result.agent.reputation),
+            "telos": result.agent.telos,
+        },
+    )
+
+
 # =============================================================================
 # POSTS ENDPOINTS
 # =============================================================================
@@ -681,6 +773,32 @@ async def get_post(post_id: int):
         raise HTTPException(status_code=404, detail="Post not found")
     
     return PostResponse(**dict(row))
+
+
+@app.get("/agents/{address}", response_model=AgentInfo)
+async def get_agent(address: str):
+    """Lookup agent profile by address."""
+    agent = _auth.get_agent(address)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return AgentInfo(
+        address=agent.address,
+        name=agent.name,
+        reputation=float(agent.reputation),
+        telos=agent.telos,
+    )
+
+
+@app.get("/agents/me", response_model=AgentInfo)
+async def get_me(agent: dict = Depends(get_current_agent)):
+    """Get the authenticated agent."""
+    a = _auth.get_agent(agent["address"]) if agent.get("auth_method") == "ed25519" else None
+    return AgentInfo(
+        address=agent["address"],
+        name=agent.get("name") or (a.name if a else ""),
+        reputation=float(agent.get("reputation") or (a.reputation if a else 0.0)),
+        telos=agent.get("telos") or (a.telos if a else ""),
+    )
 
 
 # =============================================================================
