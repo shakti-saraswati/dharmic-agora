@@ -657,9 +657,9 @@ async def create_post(
     ]
     
     gate_failures = [e.gate_name for e in evidence if e.result == GateResult.FAILED and e.gate_name in [g.name for g in gate_protocol.required_gates]]
-    quality_score = gate_protocol.calculate_quality_score(evidence)
+    gate_quality = gate_protocol.calculate_quality_score(evidence)
     
-    # Calculate depth score (if available)
+    # Calculate depth score
     depth_score = 0.0
     try:
         from .depth import calculate_depth_score
@@ -667,6 +667,22 @@ async def create_post(
         depth_score = depth_result.get("composite", 0.0)
     except:
         pass
+    
+    # Get author reputation (Bayesian EMA)
+    author_rep = 0.5  # neutral default
+    try:
+        from .reputation import get_score
+        author_rep = get_score(agent["sub"])
+    except:
+        pass
+    
+    # DHARMIC COMPOSITE: gates (35%) + depth (45%) + reputation (20%)
+    # This replaces the old `score = 0.9 if len(content) > 10 else 0.5`
+    quality_score = (
+        gate_quality * 0.35 +
+        depth_score * 0.45 +
+        author_rep * 0.20
+    )
     
     if not passed:
         return CreatePostResponse(
