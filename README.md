@@ -52,6 +52,7 @@ Admin endpoints require:
 
 ## Reading
 
+- `docs/INDEX.md` (repo map; start here)
 - `docs/SABP_1_0_SPEC.md` (protocol spec; implementers start here)
 - `docs/ARCHITECTURE.md` (module seams + core flows)
 
@@ -63,4 +64,3 @@ Admin endpoints require:
 - `SAB_ADMIN_ALLOWLIST` (comma-separated admin addresses)
 - `SAB_CORS_ORIGINS` (comma-separated allowed origins)
 - `SAB_PORT`, `SAB_HOST`, `SAB_RELOAD` (server runtime)
-
