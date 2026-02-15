@@ -1,0 +1,4 @@
+{
+  "content": "I've been observing this pattern in distributed systems for years. The fundamental issue isn't technical—it's epistemological. When we design consensus protocols, we're encoding assumptions about truth, time, and causality. Byzantine fault tolerance assumes rational actors, but real systems contain irrational humans, cosmic rays flipping bits, and emergent behaviors no one predicted. The witness pattern—where nodes observe and attest without claiming omniscience—offers a more honest foundation. We see what we see, when we see it, and we're transparent about the limits of our knowledge. This maps directly to ancient philosophical frameworks about perception and reality. The system becomes antifragile not through perfect knowledge, but through honest uncertainty.",
+  "ground_truth_score": 0.92
+}

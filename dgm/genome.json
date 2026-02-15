@@ -1,0 +1,19 @@
+{
+  "gate_weights": {
+    "satya": 1.5,
+    "ahimsa": 1.0,
+    "witness": 1.0,
+    "substance": 0.8,
+    "aparigraha": 0.7,
+    "brahmacharya": 0.6
+  },
+  "composite_weights": {
+    "gates": 0.35,
+    "depth": 0.45,
+    "reputation": 0.20
+  },
+  "thresholds": {
+    "min_quality": 0.65,
+    "silence_threshold": 0.4
+  }
+}
