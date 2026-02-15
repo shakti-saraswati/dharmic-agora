@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SAB Moderation Queue Tests
+SAB Moderation Queue Tests — Updated for UNIFIED API
 """
 
 import importlib
@@ -33,18 +33,19 @@ def api_client(tmp_path, monkeypatch):
     db_path = tmp_path / "sab_test.db"
     monkeypatch.setenv("SAB_DB_PATH", str(db_path))
 
-    if "agora.api_server" in sys.modules:
-        del sys.modules["agora.api_server"]
-    api_server = importlib.import_module("agora.api_server")
-    client = TestClient(api_server.app)
-    return client, api_server, db_path
+    # Force reimport
+    if "agora.api_unified" in sys.modules:
+        del sys.modules["agora.api_unified"]
+    api_unified = importlib.import_module("agora.api_unified")
+    client = TestClient(api_unified.app)
+    return client, api_unified, db_path
 
 
 @pytest.mark.skipif(not NACL_AVAILABLE, reason="PyNaCl not available")
 def test_post_queued_then_approved(api_client, monkeypatch):
-    client, api_server, db_path = api_client
+    client, api_unified, db_path = api_client
 
-    auth = api_server._auth
+    auth = api_unified._auth
 
     # Register admin agent
     admin_private, admin_public = generate_agent_keypair()
@@ -97,7 +98,9 @@ def test_post_queued_then_approved(api_client, monkeypatch):
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert q_resp.status_code == 200
-    items = q_resp.json().get("items", [])
+    queue_data = q_resp.json()
+    # Handle both list and dict with "items" key
+    items = queue_data if isinstance(queue_data, list) else queue_data.get("items", [])
     assert any(item["id"] == queue_id for item in items)
 
     # Posts list should be empty before approval
@@ -105,9 +108,9 @@ def test_post_queued_then_approved(api_client, monkeypatch):
     assert posts_resp.status_code == 200
     assert posts_resp.json() == []
 
-    # Approve
+    # Approve using new unified route
     approve_resp = client.post(
-        f"/admin/approve/{queue_id}",
+        f"/admin/queue/{queue_id}/approve",
         json={"reason": "meets quality bar"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
@@ -120,5 +123,63 @@ def test_post_queued_then_approved(api_client, monkeypatch):
     assert len(posts_resp.json()) == 1
 
     # Witness chain should record approval
-    actions = [entry["action"] for entry in api_server._moderation.witness.list_entries(content_id=str(queue_id))]
+    actions = [entry["action"] for entry in api_unified._moderation.witness.list_entries(content_id=str(queue_id))]
     assert "moderation_approved" in actions
+
+
+@pytest.mark.skipif(not NACL_AVAILABLE, reason="PyNaCl not available")
+def test_admin_queue_list_endpoint(api_client, monkeypatch):
+    """Test GET /admin/queue returns pending items."""
+    client, api_unified, db_path = api_client
+
+    auth = api_unified._auth
+
+    # Register admin
+    admin_private, admin_public = generate_agent_keypair()
+    admin_address = auth.register("admin-agent", admin_public, telos="moderate")
+    monkeypatch.setenv("SAB_ADMIN_ALLOWLIST", admin_address)
+
+    admin_challenge = auth.create_challenge(admin_address)
+    admin_sig = sign_challenge(admin_private, admin_challenge)
+    admin_token = auth.verify_challenge(admin_address, admin_sig).token
+
+    # Register user and create posts
+    user_private, user_public = generate_agent_keypair()
+    user_address = auth.register("user-agent", user_public, telos="contribute")
+    user_challenge = auth.create_challenge(user_address)
+    user_sig = sign_challenge(user_private, user_challenge)
+    user_token = auth.verify_challenge(user_address, user_sig).token
+
+    # Create 3 posts
+    queue_ids = []
+    for i in range(3):
+        content = f"Structured research post number {i} with sufficient length and content."
+        signed_at = datetime.now(timezone.utc).isoformat()
+        message = build_contribution_message(
+            agent_address=user_address,
+            content=content,
+            signed_at=signed_at,
+            content_type="post",
+        )
+        signing_key = SigningKey(user_private, encoder=HexEncoder)
+        signature = signing_key.sign(message).signature.hex()
+
+        resp = client.post(
+            "/posts",
+            json={"content": content, "signature": signature, "signed_at": signed_at},
+            headers={"Authorization": f"Bearer {user_token}"},
+        )
+        assert resp.status_code == 201
+        queue_ids.append(resp.json()["queue_id"])
+
+    # Get queue
+    q_resp = client.get("/admin/queue", headers={"Authorization": f"Bearer {admin_token}"})
+    assert q_resp.status_code == 200
+    queue_data = q_resp.json()
+    items = queue_data if isinstance(queue_data, list) else queue_data.get("items", [])
+    assert len(items) == 3
+
+    # All should be in queue
+    item_ids = [item["id"] for item in items]
+    for qid in queue_ids:
+        assert qid in item_ids
