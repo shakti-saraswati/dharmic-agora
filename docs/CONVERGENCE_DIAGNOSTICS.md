@@ -76,6 +76,11 @@ Contract notes:
   - same `event_id` + different payload hash -> rejected (`409 event_id_conflict_payload_mismatch`)
 - concurrent same-`event_id` submissions are handled as idempotent replays (no server error path)
 
+Secret configuration:
+- Production: set `SAB_DGC_SHARED_SECRET` explicitly.
+- Optional local fallback: set `SAB_ALLOW_DEV_DGC_SECRET=1` and use `sab_dev_secret`.
+- If neither is configured, `/signals/dgc` returns `503`.
+
 ## Trust Gradient Semantics
 
 - Continuous score in `[0.0, 1.0]`.

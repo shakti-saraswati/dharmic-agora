@@ -631,12 +631,19 @@ def _require_admin_mutation(agent: dict) -> None:
     _require_admin(agent)
 
 
-def _expected_dgc_secret() -> str:
-    return os.getenv("SAB_DGC_SHARED_SECRET", "sab_dev_secret")
+def _expected_dgc_secret() -> Optional[str]:
+    configured = os.getenv("SAB_DGC_SHARED_SECRET")
+    if configured:
+        return configured
+    if os.getenv("SAB_ALLOW_DEV_DGC_SECRET", "0") == "1":
+        return "sab_dev_secret"
+    return None
 
 
 def _require_dgc_secret(provided_secret: Optional[str]) -> None:
     expected = _expected_dgc_secret()
+    if not expected:
+        raise HTTPException(status_code=503, detail="DGC shared secret not configured")
     candidate = provided_secret or ""
     if not hmac.compare_digest(candidate, expected):
         raise HTTPException(status_code=403, detail="Invalid DGC shared secret")

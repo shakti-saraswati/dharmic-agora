@@ -366,3 +366,69 @@ def test_concurrent_same_event_ingest_is_idempotent(fresh_api):
             assert history.json()["latest"]["signal_event_id"] == "evt-race-1"
 
     asyncio.run(run())
+
+
+def test_dgc_secret_must_be_configured(fresh_api, monkeypatch: pytest.MonkeyPatch):
+    async def run() -> None:
+        transport = httpx.ASGITransport(app=fresh_api.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            token_resp = await client.post("/auth/token", json={"name": "diag-secret", "telos": "evaluation"})
+            assert token_resp.status_code == 200
+            headers = {
+                "Authorization": f"Bearer {token_resp.json()['token']}",
+                "X-SAB-DGC-Secret": "any-secret",
+            }
+
+            monkeypatch.delenv("SAB_DGC_SHARED_SECRET", raising=False)
+            monkeypatch.delenv("SAB_ALLOW_DEV_DGC_SECRET", raising=False)
+
+            resp = await client.post(
+                "/signals/dgc",
+                headers=headers,
+                json={
+                    "event_id": "evt-no-secret-1",
+                    "schema_version": "dgc.v1",
+                    "timestamp": "2026-02-16T16:50:00Z",
+                    "task_type": "evaluation",
+                    "gate_scores": {"satya": 0.8},
+                    "collapse_dimensions": {"ritual_ack": 0.2},
+                },
+            )
+            assert resp.status_code == 503
+            assert "not configured" in resp.text
+
+    asyncio.run(run())
+
+
+def test_dev_dgc_secret_fallback_only_when_explicitly_enabled(
+    fresh_api,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def run() -> None:
+        transport = httpx.ASGITransport(app=fresh_api.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            token_resp = await client.post("/auth/token", json={"name": "diag-secret-dev", "telos": "evaluation"})
+            assert token_resp.status_code == 200
+
+            monkeypatch.delenv("SAB_DGC_SHARED_SECRET", raising=False)
+            monkeypatch.setenv("SAB_ALLOW_DEV_DGC_SECRET", "1")
+
+            resp = await client.post(
+                "/signals/dgc",
+                headers={
+                    "Authorization": f"Bearer {token_resp.json()['token']}",
+                    "X-SAB-DGC-Secret": "sab_dev_secret",
+                },
+                json={
+                    "event_id": "evt-dev-secret-1",
+                    "schema_version": "dgc.v1",
+                    "timestamp": "2026-02-16T16:51:00Z",
+                    "task_type": "evaluation",
+                    "gate_scores": {"satya": 0.81},
+                    "collapse_dimensions": {"ritual_ack": 0.2},
+                },
+            )
+            assert resp.status_code == 200
+            assert resp.json()["event_id"] == "evt-dev-secret-1"
+
+    asyncio.run(run())
