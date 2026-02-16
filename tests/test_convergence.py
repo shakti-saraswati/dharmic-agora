@@ -478,3 +478,52 @@ def test_identity_and_signal_metadata_bounds(fresh_api):
             assert "metadata" in large_metadata.text
 
     asyncio.run(run())
+
+
+def test_convergence_store_defense_in_depth_bounds(tmp_path: Path):
+    from agora.convergence import ConvergenceStore
+
+    store = ConvergenceStore(tmp_path / "store_bounds.db")
+
+    with pytest.raises(ValueError):
+        store.register_identity(
+            "agent_direct_1",
+            {
+                "base_model": "test-model",
+                "alias": "DIRECT",
+                "timestamp": "2026-02-16T17:10:00Z",
+                "perceived_role": "tester",
+                "self_grade": 0.6,
+                "context_hash": "ctx_direct_1",
+                "task_affinity": ["evaluation"],
+                "metadata": {"blob": "x" * 20_000},
+            },
+        )
+
+    store.register_identity(
+        "agent_direct_1",
+        {
+            "base_model": "test-model",
+            "alias": "DIRECT",
+            "timestamp": "2026-02-16T17:11:00Z",
+            "perceived_role": "tester",
+            "self_grade": 0.6,
+            "context_hash": "ctx_direct_2",
+            "task_affinity": ["evaluation"],
+            "metadata": {"source": "unit"},
+        },
+    )
+
+    with pytest.raises(ValueError):
+        store.ingest_and_score(
+            "agent_direct_1",
+            {
+                "event_id": "evt-store-bounds-1",
+                "timestamp": "2026-02-16T17:12:00Z",
+                "task_type": "evaluation",
+                "gate_scores": {"satya": 0.9},
+                "collapse_dimensions": {"ritual_ack": 0.2},
+                "metadata": {"blob": "x" * 30_000},
+            },
+            payload_hash="hash-store-bounds-1",
+        )

@@ -38,6 +38,13 @@ class ConvergenceStore:
     """Persistence and scoring for trust gradients and convergence views."""
 
     LOW_TRUST_THRESHOLD = 0.45
+    MAX_AFFINITY_ITEMS = 32
+    MAX_AFFINITY_LEN = 80
+    MAX_IDENTITY_METADATA_ITEMS = 64
+    MAX_SIGNAL_METADATA_ITEMS = 96
+    MAX_METADATA_KEY_LEN = 80
+    MAX_IDENTITY_METADATA_JSON_BYTES = 16_384
+    MAX_SIGNAL_METADATA_JSON_BYTES = 24_576
 
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
@@ -170,15 +177,18 @@ class ConvergenceStore:
                 continue
         return out
 
-    @staticmethod
-    def _normalize_affinity(values: Optional[List[str]]) -> List[str]:
+    def _normalize_affinity(self, values: Optional[List[str]]) -> List[str]:
         if not values:
             return []
+        if len(values) > self.MAX_AFFINITY_ITEMS:
+            raise ValueError("task_affinity_exceeds_max_entries")
         out: List[str] = []
         for item in values:
             norm = str(item).strip().lower()
             if not norm:
                 continue
+            if len(norm) > self.MAX_AFFINITY_LEN:
+                raise ValueError("task_affinity_item_too_long")
             out.append(norm)
         # Keep deterministic order while deduplicating.
         seen = set()
@@ -190,6 +200,30 @@ class ConvergenceStore:
             deduped.append(item)
         return deduped
 
+    def _sanitize_metadata(
+        self,
+        raw: Any,
+        *,
+        max_items: int,
+        max_json_bytes: int,
+        error_prefix: str,
+    ) -> Dict[str, Any]:
+        metadata = raw if isinstance(raw, dict) else {"metadata_raw": str(raw)}
+        if len(metadata) > max_items:
+            raise ValueError(f"{error_prefix}_metadata_exceeds_max_entries")
+        for key in metadata.keys():
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError(f"{error_prefix}_metadata_key_invalid")
+            if len(key) > self.MAX_METADATA_KEY_LEN:
+                raise ValueError(f"{error_prefix}_metadata_key_too_long")
+        try:
+            encoded = _canonical_json(metadata).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{error_prefix}_metadata_not_json_serializable") from exc
+        if len(encoded) > max_json_bytes:
+            raise ValueError(f"{error_prefix}_metadata_exceeds_max_size")
+        return metadata
+
     def register_identity(
         self,
         agent_address: str,
@@ -198,9 +232,12 @@ class ConvergenceStore:
     ) -> Dict[str, Any]:
         now = _utc_now()
         affinity = self._normalize_affinity(packet.get("task_affinity"))
-        metadata = packet.get("metadata", {})
-        if not isinstance(metadata, dict):
-            metadata = {"metadata_raw": str(metadata)}
+        metadata = self._sanitize_metadata(
+            packet.get("metadata", {}),
+            max_items=self.MAX_IDENTITY_METADATA_ITEMS,
+            max_json_bytes=self.MAX_IDENTITY_METADATA_JSON_BYTES,
+            error_prefix="identity",
+        )
 
         row_payload = {
             "agent_address": agent_address,
@@ -270,17 +307,25 @@ class ConvergenceStore:
 
     def _coerce_signal_payload(self, payload: Dict[str, Any], agent_address: str) -> Dict[str, Any]:
         gate_scores = self._normalize_score_map(payload.get("gate_scores"))
+        if not gate_scores:
+            raise ValueError("gate_scores_required")
         collapse_dimensions = self._normalize_score_map(payload.get("collapse_dimensions"))
-        metadata = payload.get("metadata", {})
-        if not isinstance(metadata, dict):
-            metadata = {"metadata_raw": str(metadata)}
+        metadata = self._sanitize_metadata(
+            payload.get("metadata", {}),
+            max_items=self.MAX_SIGNAL_METADATA_ITEMS,
+            max_json_bytes=self.MAX_SIGNAL_METADATA_JSON_BYTES,
+            error_prefix="signal",
+        )
         schema_version = str(payload.get("schema_version") or "dgc.v1")
         metadata.setdefault("schema_version", schema_version)
 
         mission_relevance = payload.get("mission_relevance")
         mission_value: Optional[float] = None
         if mission_relevance is not None:
-            mission_value = round(_clamp(float(mission_relevance)), 4)
+            try:
+                mission_value = round(_clamp(float(mission_relevance)), 4)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("invalid_mission_relevance") from exc
 
         return {
             "event_id": str(payload["event_id"]),
