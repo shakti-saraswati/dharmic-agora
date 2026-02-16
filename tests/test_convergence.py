@@ -327,3 +327,42 @@ def test_dgc_audit_actions_match_success_replay_reject_paths(fresh_api):
             assert len(rejected.json()) == 1
 
     asyncio.run(run())
+
+
+def test_concurrent_same_event_ingest_is_idempotent(fresh_api):
+    async def run() -> None:
+        transport = httpx.ASGITransport(app=fresh_api.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            token_resp = await client.post("/auth/token", json={"name": "diag-race", "telos": "evaluation"})
+            assert token_resp.status_code == 200
+            headers = {
+                "Authorization": f"Bearer {token_resp.json()['token']}",
+                "X-SAB-DGC-Secret": "test-shared-secret",
+            }
+            payload = {
+                "event_id": "evt-race-1",
+                "schema_version": "dgc.v1",
+                "timestamp": "2026-02-16T16:40:00Z",
+                "task_id": "task-race-1",
+                "task_type": "evaluation",
+                "artifact_id": "artifact-race-1",
+                "gate_scores": {"satya": 0.86, "substance": 0.82},
+                "collapse_dimensions": {"ritual_ack": 0.2},
+                "mission_relevance": 0.84,
+            }
+
+            async def submit_once():
+                return await client.post("/signals/dgc", headers=headers, json=payload)
+
+            results = await asyncio.gather(*[submit_once() for _ in range(8)])
+            assert all(r.status_code == 200 for r in results)
+            bodies = [r.json() for r in results]
+            assert any(b["idempotent_replay"] is False for b in bodies)
+            assert any(b["idempotent_replay"] is True for b in bodies)
+
+            history = await client.get(f"/convergence/trust/{token_resp.json()['address']}", headers=headers)
+            assert history.status_code == 200
+            assert len(history.json()["history"]) == 1
+            assert history.json()["latest"]["signal_event_id"] == "evt-race-1"
+
+    asyncio.run(run())

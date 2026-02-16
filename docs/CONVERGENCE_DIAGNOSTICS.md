@@ -72,6 +72,7 @@ Contract notes:
 - `event_id` is idempotent:
   - same `event_id` + same payload hash -> accepted as replay (`idempotent_replay=true`)
   - same `event_id` + different payload hash -> rejected (`409 event_id_conflict_payload_mismatch`)
+- concurrent same-`event_id` submissions are handled as idempotent replays (no server error path)
 
 ## Trust Gradient Semantics
 

@@ -322,7 +322,7 @@ class ConvergenceStore:
             else:
                 cursor.execute(
                     """
-                    INSERT INTO dgc_signals (
+                    INSERT OR IGNORE INTO dgc_signals (
                         event_id, agent_address, signal_timestamp, task_id, task_type,
                         artifact_id, source_alias, gate_scores_json, collapse_dimensions_json,
                         mission_relevance, metadata_json, signature, payload_hash, audit_hash, created_at
@@ -346,10 +346,23 @@ class ConvergenceStore:
                         now,
                     ),
                 )
-                signal_id = cursor.lastrowid
-                cursor.execute("SELECT * FROM dgc_signals WHERE id = ?", (signal_id,))
-                row = dict(cursor.fetchone())
-                idempotent_replay = False
+                if cursor.rowcount == 0:
+                    # Another writer inserted the same event_id concurrently.
+                    cursor.execute("SELECT * FROM dgc_signals WHERE event_id = ?", (signal["event_id"],))
+                    existing_after = cursor.fetchone()
+                    if not existing_after:
+                        raise ValueError("event_id_conflict_unresolvable")
+                    row = dict(existing_after)
+                    if row.get("agent_address") != agent_address:
+                        raise ValueError("event_id_conflict_agent_mismatch")
+                    if row.get("payload_hash") != payload_hash:
+                        raise ValueError("event_id_conflict_payload_mismatch")
+                    idempotent_replay = True
+                else:
+                    signal_id = cursor.lastrowid
+                    cursor.execute("SELECT * FROM dgc_signals WHERE id = ?", (signal_id,))
+                    row = dict(cursor.fetchone())
+                    idempotent_replay = False
 
         row["gate_scores"] = self._parse_json(row.pop("gate_scores_json"), {})
         row["collapse_dimensions"] = self._parse_json(row.pop("collapse_dimensions_json"), {})
@@ -510,7 +523,7 @@ class ConvergenceStore:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO trust_gradients (
+                INSERT OR IGNORE INTO trust_gradients (
                     signal_event_id, dgc_signal_id, agent_address, task_id, task_type, artifact_id,
                     trust_score, low_trust_flag, gate_component, mission_component, collapse_component,
                     self_alignment_component, affinity_match_component, weak_gates_json, strong_gates_json,
@@ -540,12 +553,15 @@ class ConvergenceStore:
                     _utc_now(),
                 ),
             )
+            inserted = cursor.rowcount > 0
 
         stored = self._fetch_trust_by_event(signal["event_id"])
+        if not stored:
+            raise ValueError("trust_gradient_persist_failed")
         return {
             "signal": signal,
             "gradient": stored,
-            "idempotent_replay": bool(signal.get("_idempotent_replay", False)),
+            "idempotent_replay": bool(signal.get("_idempotent_replay", False)) or (not inserted),
         }
 
     def attach_audit_hash(self, event_id: str, audit_hash: str) -> None:
