@@ -11,12 +11,13 @@ Run: uvicorn agora.api_server:app --reload
 """
 
 import hashlib
+import hmac
 import json
 import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Literal
+from typing import Any, Dict, List, Optional, Literal
 from contextlib import contextmanager
 
 from fastapi import FastAPI, HTTPException, Depends, Header, Query, status
@@ -31,6 +32,7 @@ try:
     from agora.gates import OrthogonalGates
     from agora.moderation import ModerationStore
     from agora.pilot import PilotManager
+    from agora.convergence import ConvergenceStore
 except ImportError:
     # Allow running from parent directory
     import sys
@@ -41,6 +43,7 @@ except ImportError:
     from agora.gates import OrthogonalGates
     from agora.moderation import ModerationStore
     from agora.pilot import PilotManager
+    from agora.convergence import ConvergenceStore
 
 # =============================================================================
 # CONFIGURATION
@@ -176,10 +179,14 @@ def get_db():
         conn.close()
 
 
-def record_audit(action: str, agent_address: Optional[str], 
-                 resource_type: Optional[str], resource_id: Optional[int],
-                 details: dict):
-    """Record action to public audit trail."""
+def record_audit(
+    action: str,
+    agent_address: Optional[str],
+    resource_type: Optional[str],
+    resource_id: Optional[int],
+    details: dict,
+) -> Dict[str, Any]:
+    """Record action to public audit trail and return hash-chain metadata."""
     with get_db() as conn:
         cursor = conn.cursor()
         
@@ -213,7 +220,9 @@ def record_audit(action: str, agent_address: Optional[str],
             previous_hash,
             json.dumps(details)
         ))
+        audit_id = cursor.lastrowid
         conn.commit()
+    return {"id": audit_id, "data_hash": data_hash, "previous_hash": previous_hash}
 
 
 # Initialize database on module load
@@ -473,6 +482,39 @@ class GateStatus(BaseModel):
     dimensions: dict
 
 
+class AgentIdentityRequest(BaseModel):
+    base_model: str = Field(..., min_length=1, max_length=160)
+    alias: str = Field(..., min_length=1, max_length=80)
+    timestamp: str = Field(..., min_length=10, max_length=64)
+    perceived_role: str = Field("generalist", max_length=120)
+    self_grade: float = Field(..., ge=0.0, le=1.0)
+    context_hash: str = Field(..., min_length=8, max_length=256)
+    task_affinity: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DGCSignalRequest(BaseModel):
+    event_id: str = Field(..., min_length=3, max_length=160)
+    timestamp: str = Field(..., min_length=10, max_length=64)
+    task_id: Optional[str] = Field(None, max_length=160)
+    task_type: Optional[str] = Field(None, max_length=160)
+    artifact_id: Optional[str] = Field(None, max_length=160)
+    source_alias: Optional[str] = Field(None, max_length=120)
+    gate_scores: Dict[str, float] = Field(default_factory=dict)
+    collapse_dimensions: Dict[str, float] = Field(default_factory=dict)
+    mission_relevance: Optional[float] = Field(None, ge=0.0, le=1.0)
+    signature: Optional[str] = Field(None, max_length=512)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DGCSignalResponse(BaseModel):
+    event_id: str
+    trust_score: float
+    low_trust_flag: bool
+    likely_causes: List[str]
+    weak_gates: List[str]
+
+
 # =============================================================================
 # AUTHENTICATION DEPENDENCY
 # =============================================================================
@@ -481,26 +523,17 @@ class GateStatus(BaseModel):
 _auth = AgentAuth()
 _moderation = ModerationStore(db_path=AGORA_DB)
 _pilot = PilotManager(db_path=AGORA_DB)
+_convergence = ConvergenceStore(db_path=AGORA_DB)
 
 
 def _shadow_summary_path() -> Path:
     return Path(os.getenv("SAB_SHADOW_SUMMARY_PATH", "agora/logs/shadow_loop/run_summary.json"))
 
 
-def _shadow_fail_closed_enabled() -> bool:
-    raw = os.getenv("SAB_SHADOW_FAIL_CLOSED", "1").strip().lower()
-    return raw not in {"0", "false", "no", "off"}
-
-
 def _load_shadow_safety_state() -> dict:
+    """Diagnostic-only safety status (informative, non-blocking)."""
     summary_path = _shadow_summary_path()
-    state = {
-        "path": str(summary_path),
-        "enforced": _shadow_fail_closed_enabled(),
-    }
-    if not state["enforced"]:
-        state.update({"state": "disabled", "reason": "shadow_fail_closed_disabled"})
-        return state
+    state = {"path": str(summary_path), "mode": "diagnostic"}
 
     if not summary_path.exists():
         state.update({"state": "unknown", "reason": "missing_run_summary"})
@@ -528,6 +561,11 @@ def _load_shadow_safety_state() -> dict:
         {
             "state": derived_state,
             "reason": f"summary_status:{status or 'missing'}",
+            "guidance": (
+                "flag_for_diagnosis_and_context_repair"
+                if derived_state in {"unknown", "critical", "degraded"}
+                else "continue_gradient_path"
+            ),
             "summary": {
                 "timestamp": summary.get("timestamp"),
                 "status": summary.get("status"),
@@ -539,22 +577,6 @@ def _load_shadow_safety_state() -> dict:
     return state
 
 
-def _require_shadow_safe_for_privileged_write() -> None:
-    state = _load_shadow_safety_state()
-    if not state.get("enforced"):
-        return
-    if state.get("state") in {"unknown", "critical"}:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": "safety_gate_blocked",
-                "state": state.get("state"),
-                "reason": state.get("reason"),
-                "summary_path": state.get("path"),
-            },
-        )
-
-
 def _require_admin(agent: dict) -> None:
     if agent.get("auth_method") != "ed25519":
         raise HTTPException(status_code=403, detail="Admin requires Ed25519 auth")
@@ -563,8 +585,26 @@ def _require_admin(agent: dict) -> None:
 
 
 def _require_admin_mutation(agent: dict) -> None:
+    # Convergence-first policy: mutations are never hard-blocked by diagnostics.
     _require_admin(agent)
-    _require_shadow_safe_for_privileged_write()
+
+
+def _expected_dgc_secret() -> str:
+    return os.getenv("SAB_DGC_SHARED_SECRET", "sab_dev_secret")
+
+
+def _require_dgc_secret(provided_secret: Optional[str]) -> None:
+    expected = _expected_dgc_secret()
+    candidate = provided_secret or ""
+    if not hmac.compare_digest(candidate, expected):
+        raise HTTPException(status_code=403, detail="Invalid DGC shared secret")
+
+
+def _require_iso8601(value: str, field_name: str) -> None:
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid ISO8601 timestamp for {field_name}")
 
 
 async def get_current_agent(
@@ -641,8 +681,6 @@ app = FastAPI(
 )
 
 # CORS middleware - SECURITY: Never use wildcard with credentials
-import os
-
 # Load allowed origins from environment or use safe defaults for development
 _DEFAULT_ORIGINS = [
     "http://localhost:5173",  # Vite dev server
@@ -887,6 +925,104 @@ async def get_me(agent: dict = Depends(get_current_agent)):
     )
 
 
+@app.post("/agents/identity")
+async def register_agent_identity(
+    req: AgentIdentityRequest,
+    agent: dict = Depends(get_current_agent),
+):
+    """Register a modular self-described identity packet for convergence diagnostics."""
+    _require_iso8601(req.timestamp, "timestamp")
+    packet = req.model_dump()
+    packet_hash = hashlib.sha256(
+        json.dumps(packet, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    audit = record_audit(
+        "agent_identity_registered",
+        agent["address"],
+        "agent_identity",
+        None,
+        {
+            "alias": req.alias,
+            "base_model": req.base_model,
+            "packet_hash": packet_hash,
+            "context_hash": req.context_hash,
+        },
+    )
+    stored = _convergence.register_identity(agent["address"], packet=packet, audit_hash=audit["data_hash"])
+    return {"status": "registered", "identity": stored}
+
+
+@app.get("/agents/{address}/identity/latest")
+async def latest_agent_identity(address: str):
+    """Return latest declared identity packet for an agent address."""
+    identity = _convergence.latest_identity(address)
+    if not identity:
+        raise HTTPException(status_code=404, detail="No identity packet found")
+    return identity
+
+
+@app.post("/signals/dgc", response_model=DGCSignalResponse)
+async def ingest_dgc_signal(
+    req: DGCSignalRequest,
+    agent: dict = Depends(get_current_agent),
+    x_sab_dgc_secret: Optional[str] = Header(None, alias="X-SAB-DGC-Secret"),
+):
+    """
+    Ingest DGC scoring payloads and update trust gradient.
+
+    This is a convergence diagnostic input, not an enforcement gate.
+    """
+    _require_dgc_secret(x_sab_dgc_secret)
+    _require_iso8601(req.timestamp, "timestamp")
+
+    payload = req.model_dump()
+    payload_hash = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    audit = record_audit(
+        "dgc_signal_ingested",
+        agent["address"],
+        "dgc_signal",
+        None,
+        {
+            "event_id": req.event_id,
+            "task_id": req.task_id,
+            "artifact_id": req.artifact_id,
+            "payload_hash": payload_hash,
+        },
+    )
+    outcome = _convergence.ingest_and_score(
+        agent_address=agent["address"],
+        payload=payload,
+        payload_hash=payload_hash,
+        audit_hash=audit["data_hash"],
+    )
+    gradient = outcome["gradient"] or {}
+    return DGCSignalResponse(
+        event_id=req.event_id,
+        trust_score=float(gradient.get("trust_score", 0.0)),
+        low_trust_flag=bool(gradient.get("low_trust_flag", False)),
+        likely_causes=list(gradient.get("likely_causes", [])),
+        weak_gates=list(gradient.get("weak_gates", [])),
+    )
+
+
+@app.get("/convergence/trust/{address}")
+async def convergence_trust_history(
+    address: str,
+    limit: int = Query(50, ge=1, le=500),
+):
+    """Trust gradient history for one agent."""
+    history = _convergence.trust_history(address, limit=limit)
+    return {"agent_address": address, "history": history, "latest": history[0] if history else None}
+
+
+@app.get("/convergence/landscape")
+async def convergence_landscape(limit: int = Query(200, ge=1, le=1000)):
+    """Basic convergence topology view (position by trust gradient and task fit)."""
+    return _convergence.landscape(limit=limit)
+
+
 # =============================================================================
 # ADMIN + MODERATION ENDPOINTS
 # =============================================================================
@@ -897,10 +1033,24 @@ async def admin_queue(
     status_filter: Optional[str] = Query(None, alias="status"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    include_trust: bool = Query(True),
 ):
     """List moderation queue items (admin only)."""
     _require_admin(agent)
     items = _moderation.list_queue(status=status_filter, limit=limit, offset=offset)
+    if include_trust:
+        for item in items:
+            history = _convergence.trust_history(item["author_address"], limit=1)
+            latest = history[0] if history else None
+            item["trust_gradient"] = (
+                {
+                    "trust_score": latest["trust_score"],
+                    "low_trust_flag": latest["low_trust_flag"],
+                    "likely_causes": latest["likely_causes"],
+                }
+                if latest
+                else None
+            )
     return {"items": items}
 
 

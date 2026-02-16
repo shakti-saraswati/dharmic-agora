@@ -53,7 +53,6 @@ def fresh_app(tmp_path, monkeypatch):
     monkeypatch.setenv("SAB_DB_PATH", str(db_path))
     monkeypatch.setenv("SAB_ADMIN_ALLOWLIST", "")
     monkeypatch.setenv("SAB_SHADOW_SUMMARY_PATH", str(shadow_summary))
-    monkeypatch.setenv("SAB_SHADOW_FAIL_CLOSED", "1")
 
     # Force reimport to pick up new DB_PATH
     for mod_name in list(sys.modules):
@@ -320,9 +319,9 @@ class TestAdminQueue:
         assert resp.status_code == 200
         data = resp.json()
         assert data["state"] == "healthy"
-        assert data["enforced"] is True
+        assert data["mode"] == "diagnostic"
 
-    def test_admin_approve_blocked_when_shadow_unknown(self, fresh_app, monkeypatch):
+    def test_admin_approve_remains_open_when_shadow_unknown(self, fresh_app, monkeypatch):
         client, api_server, _ = fresh_app
         admin = _register_and_auth(api_server, monkeypatch, is_admin=True)
         user = _register_and_auth(api_server)
@@ -339,12 +338,11 @@ class TestAdminQueue:
         monkeypatch.setenv("SAB_SHADOW_SUMMARY_PATH", str(Path("/tmp/does-not-exist-shadow-summary.json")))
         resp = client.post(
             f"/admin/approve/{queue_id}",
-            json={"reason": "blocked-by-shadow-state"},
+            json={"reason": "diagnostic-only mode"},
             headers=admin["headers"],
         )
-        assert resp.status_code == 503
-        assert resp.json()["detail"]["error"] == "safety_gate_blocked"
-        assert resp.json()["detail"]["state"] == "unknown"
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "approved"
 
     def test_non_admin_blocked(self, fresh_app, monkeypatch):
         client, api_server, _ = fresh_app

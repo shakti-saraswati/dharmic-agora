@@ -46,7 +46,6 @@ def api_client(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("SAB_DB_PATH", str(db_path))
     monkeypatch.setenv("SAB_SHADOW_SUMMARY_PATH", str(shadow_summary))
-    monkeypatch.setenv("SAB_SHADOW_FAIL_CLOSED", "1")
 
     if "agora.api_server" in sys.modules:
         del sys.modules["agora.api_server"]

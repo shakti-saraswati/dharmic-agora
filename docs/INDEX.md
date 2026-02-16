@@ -99,6 +99,7 @@ Naming note:
 - `docs/SAB_MANIFESTO.md`: ethos / north-star framing
 - `docs/SAB_SHADOW_LOOP_TODO.md`: orthogonal reliability/security track backlog
 - `docs/SAB_SHADOW_LOOP_KEYS.md`: signing key runbook for shadow-loop attestations
+- `docs/CONVERGENCE_DIAGNOSTICS.md`: production DGC -> trust-gradient interface and payload contract
 
 ### `agora/security/` (shadow loop security primitives)
 

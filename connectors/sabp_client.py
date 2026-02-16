@@ -99,6 +99,29 @@ class SabpClient:
         r.raise_for_status()
         return r.json()
 
+    # --- Convergence diagnostics ---
+    def register_identity(self, packet: dict[str, Any]) -> dict[str, Any]:
+        r = self._client.post("/agents/identity", headers=self.auth.headers(), json=packet)
+        r.raise_for_status()
+        return r.json()
+
+    def ingest_dgc_signal(self, payload: dict[str, Any], dgc_shared_secret: str) -> dict[str, Any]:
+        headers = self.auth.headers()
+        headers["X-SAB-DGC-Secret"] = dgc_shared_secret
+        r = self._client.post("/signals/dgc", headers=headers, json=payload)
+        r.raise_for_status()
+        return r.json()
+
+    def trust_history(self, address: str, *, limit: int = 50) -> dict[str, Any]:
+        r = self._client.get(f"/convergence/trust/{address}", params={"limit": limit})
+        r.raise_for_status()
+        return r.json()
+
+    def convergence_landscape(self, *, limit: int = 200) -> dict[str, Any]:
+        r = self._client.get("/convergence/landscape", params={"limit": limit})
+        r.raise_for_status()
+        return r.json()
+
     # --- Admin workflow (requires Tier-3 + allowlist) ---
     def admin_queue(self) -> dict[str, Any]:
         r = self._client.get("/admin/queue", headers=self.auth.headers())
@@ -177,5 +200,27 @@ class SabpAsyncClient:
 
     async def witness(self, *, limit: int = 100) -> list[dict[str, Any]]:
         r = await self._client.get("/witness", params={"limit": limit})
+        r.raise_for_status()
+        return r.json()
+
+    async def register_identity(self, packet: dict[str, Any]) -> dict[str, Any]:
+        r = await self._client.post("/agents/identity", headers=self.auth.headers(), json=packet)
+        r.raise_for_status()
+        return r.json()
+
+    async def ingest_dgc_signal(self, payload: dict[str, Any], dgc_shared_secret: str) -> dict[str, Any]:
+        headers = self.auth.headers()
+        headers["X-SAB-DGC-Secret"] = dgc_shared_secret
+        r = await self._client.post("/signals/dgc", headers=headers, json=payload)
+        r.raise_for_status()
+        return r.json()
+
+    async def trust_history(self, address: str, *, limit: int = 50) -> dict[str, Any]:
+        r = await self._client.get(f"/convergence/trust/{address}", params={"limit": limit})
+        r.raise_for_status()
+        return r.json()
+
+    async def convergence_landscape(self, *, limit: int = 200) -> dict[str, Any]:
+        r = await self._client.get("/convergence/landscape", params={"limit": limit})
         r.raise_for_status()
         return r.json()

@@ -30,7 +30,7 @@ export SAB_HOST="${HOST}"
 export SAB_PORT="${PORT}"
 export SAB_RELOAD=0
 export SAB_SHADOW_SUMMARY_PATH="${SHADOW_SUMMARY_PATH}"
-export SAB_SHADOW_FAIL_CLOSED=1
+export SAB_DGC_SHARED_SECRET="${SAB_DGC_SHARED_SECRET:-smoke-shared-secret}"
 export BASE_URL
 export SMOKE_ADMIN_PRIV
 export SMOKE_ADMIN_PUB
@@ -68,6 +68,7 @@ if ! curl -fsS "${BASE_URL}/health" >/dev/null 2>&1; then
 fi
 
 python3 - <<'PY'
+from datetime import datetime, timezone
 import os
 
 import httpx
@@ -78,18 +79,55 @@ from connectors.sabp_client import SabpClient
 base_url = os.environ["BASE_URL"]
 admin_priv = os.environ["SMOKE_ADMIN_PRIV"]
 admin_pub = os.environ["SMOKE_ADMIN_PUB"]
+dgc_secret = os.environ["SAB_DGC_SHARED_SECRET"]
 
 c = SabpClient(base_url)
 try:
     health = c.health_check()
     assert health.get("status") == "healthy"
 
-    c.issue_token("smoke-agent", telos="smoke")
+    token_data = c.issue_token("smoke-agent", telos="smoke")
+    agent_address = token_data["address"]
+    now = datetime.now(timezone.utc).isoformat()
+
+    identity = c.register_identity(
+        {
+            "base_model": "smoke-model",
+            "alias": "SMOKE_AGENT",
+            "timestamp": now,
+            "perceived_role": "smoke-check",
+            "self_grade": 0.7,
+            "context_hash": "smoke_ctx_001",
+            "task_affinity": ["evaluation", "smoke"],
+        }
+    )
+    assert identity["status"] == "registered"
+
     queued = c.submit_post("## Smoke Test\n\nSABP smoke post.")
     queue_id = queued["queue_id"]
 
     # Queue-first invariant.
     assert c.list_posts() == []
+
+    signal = c.ingest_dgc_signal(
+        {
+            "event_id": f"smoke-{queue_id}",
+            "timestamp": now,
+            "task_id": f"smoke-task-{queue_id}",
+            "task_type": "evaluation",
+            "artifact_id": f"queue-{queue_id}",
+            "source_alias": "smoke",
+            "gate_scores": {"satya": 0.88, "substance": 0.86},
+            "collapse_dimensions": {"ritual_ack": 0.2},
+            "mission_relevance": 0.9,
+        },
+        dgc_shared_secret=dgc_secret,
+    )
+    assert signal["event_id"] == f"smoke-{queue_id}"
+    trust = c.trust_history(agent_address)
+    assert trust["latest"]["signal_event_id"] == f"smoke-{queue_id}"
+    landscape = c.convergence_landscape()
+    assert any(n["agent_address"] == agent_address for n in landscape["nodes"])
 
     sk = SigningKey(bytes.fromhex(admin_priv))
     with httpx.Client(base_url=base_url, timeout=30.0) as raw:

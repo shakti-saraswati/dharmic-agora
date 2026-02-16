@@ -38,7 +38,6 @@ def fresh_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SAB_JWT_SECRET", str(tmp_path / ".jwt_secret"))
     monkeypatch.setenv("SAB_ADMIN_ALLOWLIST", "")
     monkeypatch.setenv("SAB_SHADOW_SUMMARY_PATH", str(shadow_summary))
-    monkeypatch.setenv("SAB_SHADOW_FAIL_CLOSED", "1")
 
     # Force a clean import so module-level singletons pick up env vars.
     for mod_name in list(sys.modules):
@@ -137,7 +136,11 @@ def test_sabp_core_loop_queue_approve_witness(fresh_api, monkeypatch: pytest.Mon
     asyncio.run(run())
 
 
-def test_admin_safety_endpoint_and_fail_closed(fresh_api, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_admin_safety_endpoint_and_non_blocking_mutation(
+    fresh_api,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
     async def run() -> None:
         transport = httpx.ASGITransport(app=fresh_api.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -175,16 +178,19 @@ def test_admin_safety_endpoint_and_fail_closed(fresh_api, monkeypatch: pytest.Mo
             assert r.status_code == 200
             assert r.json()["state"] == "healthy"
 
-            # Switch summary path to missing file -> privileged write should fail closed.
+            # Switch summary path to missing file -> admin mutation remains non-blocking.
             monkeypatch.setenv("SAB_SHADOW_SUMMARY_PATH", str(tmp_path / "missing" / "run_summary.json"))
             r = await client.post(
                 f"/admin/approve/{queue_id}",
                 headers=admin_headers,
-                json={"reason": "should be blocked"},
+                json={"reason": "non-blocking diagnostics"},
             )
-            assert r.status_code == 503
-            detail = r.json()["detail"]
-            assert detail["error"] == "safety_gate_blocked"
-            assert detail["state"] == "unknown"
+            assert r.status_code == 200
+            assert r.json()["status"] == "approved"
+
+            safety = await client.get("/admin/safety", headers=admin_headers)
+            assert safety.status_code == 200
+            assert safety.json()["state"] == "unknown"
+            assert safety.json()["mode"] == "diagnostic"
 
     asyncio.run(run())
