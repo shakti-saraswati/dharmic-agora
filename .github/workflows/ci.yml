@@ -27,6 +27,10 @@ jobs:
         pip install -r requirements.txt
         pip install pytest pytest-asyncio pytest-cov
 
+    - name: Validate NAME_REGISTRY
+      run: |
+        python3 scripts/check_name_registry.py
+
     - name: Run tests
       run: |
         pytest agora/tests/ -v --cov=agora --cov-report=xml
