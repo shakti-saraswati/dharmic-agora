@@ -122,6 +122,12 @@ class TestAuthFlow:
         assert data["status"] == "healthy"
         from agora.config import SAB_VERSION
         assert data["version"] == SAB_VERSION
+        assert "convergence" in data
+        assert set(data["convergence"].keys()) == {
+            "dgc_signal_count",
+            "trust_gradient_count",
+            "low_trust_agents",
+        }
 
     def test_root_endpoint(self, fresh_app):
         client, _, _ = fresh_app

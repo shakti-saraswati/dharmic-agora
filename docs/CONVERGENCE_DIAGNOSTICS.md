@@ -18,6 +18,8 @@ Principle: `gates score, never block`.
   - Returns trust gradient history and latest diagnostic snapshot.
 - `GET /convergence/landscape`
   - Returns a basic topology view: agent nodes positioned by trust gradient.
+- `GET /health`
+  - Includes convergence counters (`dgc_signal_count`, `trust_gradient_count`, `low_trust_agents`).
 
 ## CLI Bridge (AGNI handoff)
 

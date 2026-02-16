@@ -649,6 +649,39 @@ def _require_iso8601(value: str, field_name: str) -> None:
         raise HTTPException(status_code=400, detail=f"Invalid ISO8601 timestamp for {field_name}")
 
 
+def _convergence_health_snapshot() -> Dict[str, int]:
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) FROM dgc_signals")
+        dgc_signal_count = int(cursor.fetchone()[0] or 0)
+
+        cursor.execute("SELECT COUNT(*) FROM trust_gradients")
+        trust_gradient_count = int(cursor.fetchone()[0] or 0)
+
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM trust_gradients t
+            JOIN (
+                SELECT agent_address, MAX(id) AS max_id
+                FROM trust_gradients
+                GROUP BY agent_address
+            ) latest
+            ON latest.agent_address = t.agent_address
+            AND latest.max_id = t.id
+            WHERE t.low_trust_flag = 1
+            """
+        )
+        low_trust_agents = int(cursor.fetchone()[0] or 0)
+
+    return {
+        "dgc_signal_count": dgc_signal_count,
+        "trust_gradient_count": trust_gradient_count,
+        "low_trust_agents": low_trust_agents,
+    }
+
+
 async def get_current_agent(
     authorization: Optional[str] = Header(None),
     x_sab_key: Optional[str] = Header(None, alias="X-SAB-Key"),
@@ -1636,11 +1669,13 @@ async def get_post_gates(post_id: int):
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
+    convergence = _convergence_health_snapshot()
     return {
         "status": "healthy",
         "agora": "dharmic",
         "version": SAB_VERSION,
         "gates": len(GateKeeper.ALL_GATES),
+        "convergence": convergence,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
