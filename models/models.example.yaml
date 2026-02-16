@@ -1,0 +1,50 @@
+# Copy to `models.yaml` (or set SAB_MODELS_CONFIG=/path/to/models.yaml).
+#
+# This file is intentionally provider-agnostic:
+# - any OpenAI-compatible endpoint can be used (OpenAI, vLLM, many hosted providers)
+# - Ollama works for local models
+# - "echo" is for wiring/tests
+
+providers:
+  local_ollama:
+    kind: ollama
+    base_url: http://localhost:11434
+    timeout_s: 180
+
+  openai_compat:
+    kind: openai_compatible
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    timeout_s: 60
+
+  echo:
+    kind: echo
+
+roles:
+  prompt_engineer:
+    provider: openai_compat
+    model: gpt-4o-mini
+    temperature: 0.2
+    max_tokens: 2048
+    fallback:
+      - provider: local_ollama
+        model: deepseek-r1
+
+  yolo_builder:
+    provider: local_ollama
+    model: qwen2.5-coder
+    temperature: 0.2
+    max_tokens: 4096
+
+  unit_tester:
+    provider: openai_compat
+    model: gpt-4o-mini
+    temperature: 0.1
+    max_tokens: 2048
+
+  critic:
+    provider: openai_compat
+    model: gpt-4o-mini
+    temperature: 0.2
+    max_tokens: 2048
+
