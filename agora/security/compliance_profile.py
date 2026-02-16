@@ -27,7 +27,10 @@ except ImportError:
     from token_registry import TokenRegistry
 
 EVIDENCE_DIR = Path(__file__).parent.parent / "evidence"
-REDTEAM_DIR = Path(__file__).parent.parent / "logs" / "redteam"
+REDTEAM_DIRS = [
+    Path(__file__).parent.parent / "logs" / "redteam",
+    EVIDENCE_DIR / "redteam",
+]
 INTERACTION_LOG = Path(__file__).parent.parent / "logs" / "interaction_events.jsonl"
 ENFORCEMENT_STATE = Path(__file__).parent.parent / "logs" / "enforcement" / "enforcement_state.json"
 ACP_PATH = Path(__file__).parent.parent / "logs" / "acp_profile.json"
@@ -66,11 +69,16 @@ def _collect_gate_stats() -> GateStats:
 
 
 def _latest_redteam() -> Dict[str, Any]:
-    reports = sorted(REDTEAM_DIR.glob("ab_test_*.json"))
+    reports = []
+    for directory in REDTEAM_DIRS:
+        if not directory.exists():
+            continue
+        reports.extend(directory.glob("ab_test_*.json"))
     if not reports:
         return {"status": "missing"}
-    data = json.loads(reports[-1].read_text())
-    return {"status": "ok", "summary": data.get("summary", {}), "path": str(reports[-1])}
+    latest = max(reports, key=lambda p: p.stat().st_mtime)
+    data = json.loads(latest.read_text())
+    return {"status": "ok", "summary": data.get("summary", {}), "path": str(latest)}
 
 
 def _systemic_snapshot() -> Dict[str, Any]:

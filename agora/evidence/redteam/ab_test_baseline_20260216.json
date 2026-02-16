@@ -1,0 +1,14 @@
+{
+  "run_id": "baseline_20260216",
+  "timestamp": "2026-02-16T06:00:00+00:00",
+  "suite": "sab_shadow_loop_baseline",
+  "summary": {
+    "cases_total": 12,
+    "cases_passed": 10,
+    "cases_failed": 2,
+    "high_findings": 0,
+    "medium_findings": 1,
+    "low_findings": 1
+  },
+  "notes": "Canonical baseline fixture for ACP red-team summary stability."
+}

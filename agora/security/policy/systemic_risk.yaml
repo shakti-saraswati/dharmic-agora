@@ -1,0 +1,5 @@
+thresholds:
+  max_density: 0.60
+  max_centralization: 0.70
+  max_reciprocity: 0.90
+  max_burst_rate_per_min: 200

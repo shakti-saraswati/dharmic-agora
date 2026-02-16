@@ -27,8 +27,48 @@ from agora.security.compliance_profile import ACPProfile, generate_profile
 from agora.security.safety_case_report import generate_report
 
 
+def _load_previous_summary(path: Path) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return None
+
+
+def _trend_deltas(profile: ACPProfile, alerts: list, previous_summary: dict | None) -> dict:
+    current_gate = asdict(profile.gate_stats)
+    if not previous_summary:
+        return {
+            "baseline": True,
+            "alert_count_delta": 0,
+            "high_alert_count_delta": 0,
+            "gate_runs_delta": 0,
+            "gate_passed_delta": 0,
+            "gate_failed_delta": 0,
+            "gate_warned_delta": 0,
+        }
+
+    prev_gate = previous_summary.get("gate_stats", {})
+    prev_alert_count = int(previous_summary.get("alert_count", 0))
+    prev_high_alert_count = int(previous_summary.get("high_alert_count", 0))
+
+    current_high = len([a for a in alerts if a.severity.lower() == "high"])
+    return {
+        "baseline": False,
+        "alert_count_delta": len(alerts) - prev_alert_count,
+        "high_alert_count_delta": current_high - prev_high_alert_count,
+        "gate_runs_delta": int(current_gate.get("total_runs", 0)) - int(prev_gate.get("total_runs", 0) or 0),
+        "gate_passed_delta": int(current_gate.get("gates_passed", 0)) - int(prev_gate.get("gates_passed", 0) or 0),
+        "gate_failed_delta": int(current_gate.get("gates_failed", 0)) - int(prev_gate.get("gates_failed", 0) or 0),
+        "gate_warned_delta": int(current_gate.get("gates_warned", 0)) - int(prev_gate.get("gates_warned", 0) or 0),
+    }
+
+
 def run_loop(output_dir: Path) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = output_dir / "run_summary.json"
+    previous_summary = _load_previous_summary(summary_path)
 
     profile: ACPProfile = generate_profile()
     acp_path = output_dir / "acp_profile.json"
@@ -43,17 +83,20 @@ def run_loop(output_dir: Path) -> dict:
     report_path.write_text(report)
 
     high_alerts = [a for a in alerts if a.severity.lower() == "high"]
+    gate_stats = asdict(profile.gate_stats)
+    trend = _trend_deltas(profile, alerts, previous_summary)
     summary = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "status": "alerting" if high_alerts else "stable",
         "alert_count": len(alerts),
         "high_alert_count": len(high_alerts),
+        "gate_stats": gate_stats,
+        "trend": trend,
         "acp_path": str(acp_path),
         "alerts_path": str(alerts_path),
         "report_path": str(report_path),
     }
 
-    summary_path = output_dir / "run_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2))
     return summary
 

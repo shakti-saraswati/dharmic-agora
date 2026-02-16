@@ -1,0 +1,5 @@
+allowlist: []
+
+signing:
+  required: false
+  key_env: SKILL_REGISTRY_SIGNING_KEY

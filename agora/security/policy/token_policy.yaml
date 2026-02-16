@@ -1,0 +1,8 @@
+ttl_seconds: 3600
+
+revocation:
+  require_reason: true
+
+signing:
+  required: false
+  key_env: TOKEN_SIGNING_KEY

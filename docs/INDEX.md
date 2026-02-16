@@ -97,6 +97,17 @@ Naming note:
 - `docs/UPSTREAMS_v0.md`: dependency ledger
 - `docs/49_TO_KEYSTONES_MAP.md`: vision -> execution bridge
 - `docs/SAB_MANIFESTO.md`: ethos / north-star framing
+- `docs/SAB_SHADOW_LOOP_TODO.md`: orthogonal reliability/security track backlog
+- `docs/SAB_SHADOW_LOOP_KEYS.md`: signing key runbook for shadow-loop attestations
+
+### `agora/security/` (shadow loop security primitives)
+
+- `agora/security/compliance_profile.py`: ACP snapshot generator
+- `agora/security/anomaly_detection.py`: enforcement + systemic anomaly detector
+- `agora/security/systemic_monitor.py`: network-level risk metrics and policy evaluation
+- `agora/security/safety_case_report.py`: safety report with live evidence
+- `agora/security/policy/*.yaml`: thresholds and signing policy defaults
+- `scripts/orthogonal_safety_loop.py`: one-command loop runner
 
 ### `models/` (model bus)
 

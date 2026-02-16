@@ -17,10 +17,10 @@ This is the "come back every session" list.
 - [x] Add smoke test for security tooling import/runtime
 
 ## Phase 1 - Evidence Quality
-- [ ] Add canonical red-team fixture set (`agora/logs/redteam/ab_test_*.json`) for stable ACP output
-- [ ] Add policy files under `agora/security/policy/` for systemic thresholds and anomaly thresholds
-- [ ] Add signature key handling runbook (`ACP_SIGNING_KEY`, `TOKEN_SIGNING_KEY`, `SKILL_REGISTRY_SIGNING_KEY`)
-- [ ] Track trend deltas (today vs previous run) in `run_summary.json`
+- [x] Add canonical red-team fixture set (`agora/evidence/redteam/ab_test_*.json`) for stable ACP output
+- [x] Add policy files under `agora/security/policy/` for systemic thresholds and anomaly thresholds
+- [x] Add signature key handling runbook (`ACP_SIGNING_KEY`, `TOKEN_SIGNING_KEY`, `SKILL_REGISTRY_SIGNING_KEY`)
+- [x] Track trend deltas (today vs previous run) in `run_summary.json`
 
 ## Phase 2 - Trust Gates
 - [ ] Wire ACP status into a moderation-visible endpoint
@@ -42,3 +42,4 @@ This is the "come back every session" list.
 ## Session Notes
 - 2026-02-16: Bootstrapped SAB Shadow Loop (self-contained modules + runner + starter tests).
 - 2026-02-16: First loop run completed (`status=stable`, `high_alert_count=0`).
+- 2026-02-16: Phase 1 reached (policy files + canonical red-team evidence + key runbook + summary trend deltas).
