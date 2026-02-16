@@ -752,12 +752,6 @@ except Exception:
     pass
 
 
-@app.on_event("startup")
-async def startup():
-    """Ensure database is initialized."""
-    init_database()
-
-
 # =============================================================================
 # AUTH ENDPOINTS (TIER 1 + TIER 2)
 # =============================================================================
