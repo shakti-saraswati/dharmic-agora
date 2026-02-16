@@ -134,6 +134,20 @@ class TestAuthFlow:
         resp = client.post("/posts", json={"content": "test", "signature": "x", "signed_at": "x"})
         assert resp.status_code == 401
 
+    def test_cors_preflight_allows_dgc_secret_header(self, fresh_app):
+        client, _, _ = fresh_app
+        resp = client.options(
+            "/signals/dgc",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "Authorization,Content-Type,X-SAB-DGC-Secret",
+            },
+        )
+        assert resp.status_code == 200
+        allow_headers = resp.headers.get("access-control-allow-headers", "").lower()
+        assert "x-sab-dgc-secret" in allow_headers
+
 
 # =============================================================================
 # POST LIFECYCLE TESTS
