@@ -148,6 +148,7 @@ def test_cli_text_output_mode(monkeypatch: pytest.MonkeyPatch, capsys: pytest.Ca
 def test_cli_ingest_dgc_batch_requires_secret(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     payloads_path = tmp_path / "payloads.jsonl"
     payloads_path.write_text('{"event_id":"evt-1","timestamp":"2026-02-16T00:00:00Z","gate_scores":{"satya":0.9}}\n')
@@ -165,5 +166,47 @@ def test_cli_ingest_dgc_batch_requires_secret(
             str(payloads_path),
         ],
     )
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exc:
         sabp_cli.main()
+    assert exc.value.code == 2
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["status"] == "error"
+    assert "missing --dgc-secret" in payload["error"]
+
+
+def test_cli_emits_json_error_on_runtime_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class DummyClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def trust_history(self, address, limit=50):
+            raise RuntimeError(f"boom:{address}:{limit}")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(sabp_cli, "SabpClient", DummyClient)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "sabp_cli.py",
+            "--url",
+            "http://example",
+            "trust",
+            "--address",
+            "agent-z",
+            "--limit",
+            "7",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        sabp_cli.main()
+    assert exc.value.code == 1
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 1
+    assert payload["error"] == "boom:agent-z:7"

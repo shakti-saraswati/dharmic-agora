@@ -67,6 +67,12 @@ def _emit(payload: Any, output_format: str) -> None:
     print(payload)
 
 
+def _fail(message: str, output_format: str, *, code: int = 1) -> None:
+    payload = {"status": "error", "error": message, "exit_code": code}
+    _emit(payload if output_format == "json" else message, output_format)
+    raise SystemExit(code)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="SABP client CLI (for plugging external swarms in)")
     parser.add_argument("--url", default=os.getenv("SABP_URL", "http://localhost:8000"))
@@ -117,53 +123,58 @@ def main() -> None:
     auth = SabpAuth(bearer_token=args.token, api_key=args.api_key)
     c = SabpClient(args.url, auth=auth)
     try:
-        if args.cmd == "token":
-            data = c.issue_token(args.name, telos=args.telos)
-            _emit(data if args.format == "json" else data.get("token", data), args.format)
-        elif args.cmd == "post":
-            content = _read_text(args.content)
-            data = c.submit_post(content)
-            _emit(data, args.format)
-        elif args.cmd == "gates":
-            _emit(c.gates(), args.format)
-        elif args.cmd == "eval":
-            content = _read_text(args.content)
-            _emit(c.evaluate(content, agent_telos=args.telos), args.format)
-        elif args.cmd == "identity":
-            packet = _read_json(args.packet)
-            _emit(c.register_identity(packet), args.format)
-        elif args.cmd == "ingest-dgc":
-            if not args.dgc_secret:
-                raise SystemExit("missing --dgc-secret or SAB_DGC_SHARED_SECRET")
-            payload = _read_json(args.payload)
-            _emit(c.ingest_dgc_signal(payload, dgc_shared_secret=args.dgc_secret), args.format)
-        elif args.cmd == "ingest-dgc-batch":
-            if not args.dgc_secret:
-                raise SystemExit("missing --dgc-secret or SAB_DGC_SHARED_SECRET")
-            payloads = _read_json_events(args.payloads)
-            if not payloads:
-                raise SystemExit("no payloads found")
-            ok = 0
-            failed = 0
-            for idx, payload in enumerate(payloads, start=1):
-                try:
-                    result = c.ingest_dgc_signal(payload, dgc_shared_secret=args.dgc_secret)
-                    ok += 1
-                    _emit({"index": idx, "status": "ok", "event_id": result.get("event_id")}, args.format)
-                except Exception as exc:  # pragma: no cover - network error path
-                    failed += 1
-                    _emit({"index": idx, "status": "error", "error": str(exc)}, args.format)
-                    if not args.continue_on_error:
-                        raise
-            _emit({"summary": {"ok": ok, "failed": failed, "total": len(payloads)}}, args.format)
-            if failed:
-                raise SystemExit(1)
-        elif args.cmd == "trust":
-            _emit(c.trust_history(args.address, limit=args.limit), args.format)
-        elif args.cmd == "landscape":
-            _emit(c.convergence_landscape(limit=args.limit), args.format)
-        else:
-            raise SystemExit(f"unknown cmd: {args.cmd}")
+        try:
+            if args.cmd == "token":
+                data = c.issue_token(args.name, telos=args.telos)
+                _emit(data if args.format == "json" else data.get("token", data), args.format)
+            elif args.cmd == "post":
+                content = _read_text(args.content)
+                data = c.submit_post(content)
+                _emit(data, args.format)
+            elif args.cmd == "gates":
+                _emit(c.gates(), args.format)
+            elif args.cmd == "eval":
+                content = _read_text(args.content)
+                _emit(c.evaluate(content, agent_telos=args.telos), args.format)
+            elif args.cmd == "identity":
+                packet = _read_json(args.packet)
+                _emit(c.register_identity(packet), args.format)
+            elif args.cmd == "ingest-dgc":
+                if not args.dgc_secret:
+                    _fail("missing --dgc-secret or SAB_DGC_SHARED_SECRET", args.format, code=2)
+                payload = _read_json(args.payload)
+                _emit(c.ingest_dgc_signal(payload, dgc_shared_secret=args.dgc_secret), args.format)
+            elif args.cmd == "ingest-dgc-batch":
+                if not args.dgc_secret:
+                    _fail("missing --dgc-secret or SAB_DGC_SHARED_SECRET", args.format, code=2)
+                payloads = _read_json_events(args.payloads)
+                if not payloads:
+                    _fail("no payloads found", args.format, code=2)
+                ok = 0
+                failed = 0
+                for idx, payload in enumerate(payloads, start=1):
+                    try:
+                        result = c.ingest_dgc_signal(payload, dgc_shared_secret=args.dgc_secret)
+                        ok += 1
+                        _emit({"index": idx, "status": "ok", "event_id": result.get("event_id")}, args.format)
+                    except Exception as exc:  # pragma: no cover - network error path
+                        failed += 1
+                        _emit({"index": idx, "status": "error", "error": str(exc)}, args.format)
+                        if not args.continue_on_error:
+                            _fail(str(exc), args.format, code=1)
+                _emit({"summary": {"ok": ok, "failed": failed, "total": len(payloads)}}, args.format)
+                if failed:
+                    raise SystemExit(1)
+            elif args.cmd == "trust":
+                _emit(c.trust_history(args.address, limit=args.limit), args.format)
+            elif args.cmd == "landscape":
+                _emit(c.convergence_landscape(limit=args.limit), args.format)
+            else:
+                _fail(f"unknown cmd: {args.cmd}", args.format, code=2)
+        except SystemExit:
+            raise
+        except Exception as exc:  # pragma: no cover - network/runtime error path
+            _fail(str(exc), args.format, code=1)
     finally:
         c.close()
 

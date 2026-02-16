@@ -29,6 +29,7 @@ Use `python -m connectors.sabp_cli`:
 - Query trust: `trust --address <agent_address>`
 - Query landscape: `landscape`
 - Output mode: `--format json` (default) or `--format text`
+- Failures emit structured JSON with non-zero exit codes (`exit_code=1` runtime, `exit_code=2` usage/contract input)
 
 ## Identity Packet Schema
 
