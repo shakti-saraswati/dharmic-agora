@@ -1,1 +1,1 @@
-"'$(basename "$d" | tr _   | tr [:lower:] [:upper:]) agent package."'
+"""VAJRA Flywheel agent package."""

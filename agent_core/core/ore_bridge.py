@@ -18,8 +18,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-from core.frontmatter_v2 import render_frontmatter, validate_frontmatter_v2
-from core.witness_event import append_event, new_event, verify_log
+try:
+    # Preferred: package import (`import agent_core.core.ore_bridge`).
+    from .frontmatter_v2 import render_frontmatter, validate_frontmatter_v2
+    from .witness_event import append_event, new_event, verify_log
+except ImportError:  # pragma: no cover
+    # Also support direct execution (`python agent_core/core/ore_bridge.py ...`).
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from core.frontmatter_v2 import render_frontmatter, validate_frontmatter_v2  # type: ignore
+    from core.witness_event import append_event, new_event, verify_log  # type: ignore
 
 
 def _sha256_file(path: Path) -> str:
@@ -205,4 +214,3 @@ def main(argv: List[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

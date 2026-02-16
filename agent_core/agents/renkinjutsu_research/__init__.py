@@ -1,1 +1,1 @@
-"'$(basename "$d" | tr _   | tr [:lower:] [:upper:]) agent package."'
+"""RENKINJUTSU Research agent package."""
