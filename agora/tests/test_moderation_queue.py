@@ -4,6 +4,7 @@ SAB Moderation Queue Tests
 """
 
 import importlib
+import json
 import sys
 from pathlib import Path
 from datetime import datetime, timezone
@@ -31,7 +32,21 @@ except ImportError:
 @pytest.fixture
 def api_client(tmp_path, monkeypatch):
     db_path = tmp_path / "sab_test.db"
+    shadow_summary = tmp_path / "shadow_loop" / "run_summary.json"
+    shadow_summary.parent.mkdir(parents=True, exist_ok=True)
+    shadow_summary.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-02-16T00:00:00+00:00",
+                "status": "stable",
+                "alert_count": 0,
+                "high_alert_count": 0,
+            }
+        )
+    )
     monkeypatch.setenv("SAB_DB_PATH", str(db_path))
+    monkeypatch.setenv("SAB_SHADOW_SUMMARY_PATH", str(shadow_summary))
+    monkeypatch.setenv("SAB_SHADOW_FAIL_CLOSED", "1")
 
     if "agora.api_server" in sys.modules:
         del sys.modules["agora.api_server"]

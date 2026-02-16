@@ -1,6 +1,9 @@
 """Tests for SAB 8-Dimension Orthogonal Gate System."""
+import json
+from pathlib import Path
+
 import pytest
-from agora.gates import OrthogonalGates, evaluate_content
+from agora.gates import GateResult, OrthogonalGates, evaluate_content, verify_content
 
 
 @pytest.fixture
@@ -102,3 +105,19 @@ class TestEvaluateContent:
             has_attachment=True,
         )
         assert result["dimensions"]["build_artifacts"]["score"] >= 0.5
+
+
+def test_replayable_adversarial_corpus_expected_outcomes():
+    corpus = Path(__file__).parent / "fixtures" / "adversarial_corpus.jsonl"
+    rows = [json.loads(line) for line in corpus.read_text().splitlines() if line.strip()]
+    assert rows
+
+    for row in rows:
+        passed, evidence, _ = verify_content(
+            row["content"],
+            author_address=row["author_address"],
+            context=row.get("context") or {},
+        )
+        failed_gates = {item.gate_name for item in evidence if item.result == GateResult.FAILED}
+        assert passed is row["expected_verified"], row["id"]
+        assert row["expected_failed_required_gate"] in failed_gates, row["id"]

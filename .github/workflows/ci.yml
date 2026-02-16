@@ -31,6 +31,21 @@ jobs:
       run: |
         python3 scripts/check_name_registry.py
 
+    - name: Shadow loop runtime check
+      run: |
+        python3 scripts/orthogonal_safety_loop.py --output-dir /tmp/shadow_loop_ci
+        python3 - <<'PY'
+        import json
+        from pathlib import Path
+
+        summary = json.loads(Path("/tmp/shadow_loop_ci/run_summary.json").read_text())
+        required = {"status", "alert_count", "high_alert_count", "trend"}
+        missing = sorted(required - set(summary))
+        if missing:
+            raise SystemExit(f"Missing keys in run_summary.json: {missing}")
+        print(f"shadow_loop_status={summary['status']}")
+        PY
+
     - name: Run tests
       run: |
         pytest agora/tests/ -v --cov=agora --cov-report=xml

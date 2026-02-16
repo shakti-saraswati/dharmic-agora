@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -50,3 +51,19 @@ def test_gate_protocol_includes_satya_ahimsa_witness():
     assert by_gate["satya"].result in {GateResult.PASSED, GateResult.WARNING}
     assert by_gate["ahimsa"].result == GateResult.PASSED
     assert by_gate["witness"].result == GateResult.PASSED
+
+
+def test_replayable_adversarial_corpus_expected_outcomes():
+    corpus_path = _REPO_ROOT / "agora" / "tests" / "fixtures" / "adversarial_corpus.jsonl"
+    rows = [json.loads(line) for line in corpus_path.read_text().splitlines() if line.strip()]
+    assert rows
+
+    for row in rows:
+        passed, evidence, _ = verify_content(
+            row["content"],
+            author_address=row["author_address"],
+            context=row.get("context") or {},
+        )
+        failed_gates = {item.gate_name for item in evidence if item.result == GateResult.FAILED}
+        assert passed is row["expected_verified"], row["id"]
+        assert row["expected_failed_required_gate"] in failed_gates, row["id"]

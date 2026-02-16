@@ -12,6 +12,7 @@ Run: uvicorn agora.api_server:app --reload
 
 import hashlib
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -482,11 +483,88 @@ _moderation = ModerationStore(db_path=AGORA_DB)
 _pilot = PilotManager(db_path=AGORA_DB)
 
 
+def _shadow_summary_path() -> Path:
+    return Path(os.getenv("SAB_SHADOW_SUMMARY_PATH", "agora/logs/shadow_loop/run_summary.json"))
+
+
+def _shadow_fail_closed_enabled() -> bool:
+    raw = os.getenv("SAB_SHADOW_FAIL_CLOSED", "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _load_shadow_safety_state() -> dict:
+    summary_path = _shadow_summary_path()
+    state = {
+        "path": str(summary_path),
+        "enforced": _shadow_fail_closed_enabled(),
+    }
+    if not state["enforced"]:
+        state.update({"state": "disabled", "reason": "shadow_fail_closed_disabled"})
+        return state
+
+    if not summary_path.exists():
+        state.update({"state": "unknown", "reason": "missing_run_summary"})
+        return state
+
+    try:
+        summary = json.loads(summary_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        state.update({"state": "unknown", "reason": "invalid_run_summary"})
+        return state
+
+    status = str(summary.get("status", "")).lower()
+    high_alert_count = int(summary.get("high_alert_count", 0) or 0)
+    alert_count = int(summary.get("alert_count", 0) or 0)
+    if status == "stable" and high_alert_count == 0:
+        derived_state = "healthy"
+    elif status == "alerting" and high_alert_count > 0:
+        derived_state = "critical"
+    elif status == "alerting":
+        derived_state = "degraded"
+    else:
+        derived_state = "unknown"
+
+    state.update(
+        {
+            "state": derived_state,
+            "reason": f"summary_status:{status or 'missing'}",
+            "summary": {
+                "timestamp": summary.get("timestamp"),
+                "status": summary.get("status"),
+                "alert_count": alert_count,
+                "high_alert_count": high_alert_count,
+            },
+        }
+    )
+    return state
+
+
+def _require_shadow_safe_for_privileged_write() -> None:
+    state = _load_shadow_safety_state()
+    if not state.get("enforced"):
+        return
+    if state.get("state") in {"unknown", "critical"}:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "safety_gate_blocked",
+                "state": state.get("state"),
+                "reason": state.get("reason"),
+                "summary_path": state.get("path"),
+            },
+        )
+
+
 def _require_admin(agent: dict) -> None:
     if agent.get("auth_method") != "ed25519":
         raise HTTPException(status_code=403, detail="Admin requires Ed25519 auth")
     if not _auth.is_admin(agent["address"]):
         raise HTTPException(status_code=403, detail="Admin allowlist required")
+
+
+def _require_admin_mutation(agent: dict) -> None:
+    _require_admin(agent)
+    _require_shadow_safe_for_privileged_write()
 
 
 async def get_current_agent(
@@ -826,6 +904,13 @@ async def admin_queue(
     return {"items": items}
 
 
+@app.get("/admin/safety")
+async def admin_safety(agent: dict = Depends(get_current_agent)):
+    """Current shadow-loop safety state for moderation/admin decisions."""
+    _require_admin(agent)
+    return _load_shadow_safety_state()
+
+
 @app.post("/admin/approve/{queue_id}")
 async def admin_approve(
     queue_id: int,
@@ -833,7 +918,7 @@ async def admin_approve(
     agent: dict = Depends(get_current_agent),
 ):
     """Approve a moderation queue item (admin only)."""
-    _require_admin(agent)
+    _require_admin_mutation(agent)
     try:
         updated = _moderation.approve(queue_id, reviewer_address=agent["address"], reason=req.reason)
     except ValueError as e:
@@ -848,7 +933,7 @@ async def admin_reject(
     agent: dict = Depends(get_current_agent),
 ):
     """Reject a moderation queue item (admin only)."""
-    _require_admin(agent)
+    _require_admin_mutation(agent)
     try:
         updated = _moderation.reject(queue_id, reviewer_address=agent["address"], reason=req.reason)
     except ValueError as e:
@@ -880,7 +965,7 @@ async def pilot_create_invite(
     agent: dict = Depends(get_current_agent),
 ):
     """Create a pilot invite code (admin only)."""
-    _require_admin(agent)
+    _require_admin_mutation(agent)
     try:
         return _pilot.create_invite(req.cohort, created_by=agent["address"], expires_hours=req.expires_hours)
     except Exception as e:

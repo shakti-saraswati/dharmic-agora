@@ -23,10 +23,10 @@ This is the "come back every session" list.
 - [x] Track trend deltas (today vs previous run) in `run_summary.json`
 
 ## Phase 2 - Trust Gates
-- [ ] Wire ACP status into a moderation-visible endpoint
-- [ ] Fail closed on "critical+unknown" safety state for privileged actions
-- [ ] Add replayable "known bad" adversarial corpus and expected outcomes
-- [ ] Add CI check: shadow loop must execute with zero import/runtime errors
+- [x] Wire ACP status into a moderation-visible endpoint
+- [x] Fail closed on "critical+unknown" safety state for privileged actions
+- [x] Add replayable "known bad" adversarial corpus and expected outcomes
+- [x] Add CI check: shadow loop must execute with zero import/runtime errors
 
 ## Phase 3 - Operations Cadence
 - [ ] Add cron/launchd entry for hourly shadow loop
@@ -43,3 +43,4 @@ This is the "come back every session" list.
 - 2026-02-16: Bootstrapped SAB Shadow Loop (self-contained modules + runner + starter tests).
 - 2026-02-16: First loop run completed (`status=stable`, `high_alert_count=0`).
 - 2026-02-16: Phase 1 reached (policy files + canonical red-team evidence + key runbook + summary trend deltas).
+- 2026-02-16: Phase 2 reached (admin safety endpoint + fail-closed privileged writes + adversarial replay corpus + CI runtime gate).

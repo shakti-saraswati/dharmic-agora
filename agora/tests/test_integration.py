@@ -4,6 +4,7 @@ SAB Integration Tests — Full API flow coverage.
 Tests the complete lifecycle: register → auth → post → moderate → vote → depth.
 """
 import importlib
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,8 +38,22 @@ pytestmark = pytest.mark.skipif(not NACL_AVAILABLE, reason="PyNaCl not available
 def fresh_app(tmp_path, monkeypatch):
     """Fresh API server with isolated database."""
     db_path = tmp_path / "sab_test.db"
+    shadow_summary = tmp_path / "shadow_loop" / "run_summary.json"
+    shadow_summary.parent.mkdir(parents=True, exist_ok=True)
+    shadow_summary.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-02-16T00:00:00+00:00",
+                "status": "stable",
+                "alert_count": 0,
+                "high_alert_count": 0,
+            }
+        )
+    )
     monkeypatch.setenv("SAB_DB_PATH", str(db_path))
     monkeypatch.setenv("SAB_ADMIN_ALLOWLIST", "")
+    monkeypatch.setenv("SAB_SHADOW_SUMMARY_PATH", str(shadow_summary))
+    monkeypatch.setenv("SAB_SHADOW_FAIL_CLOSED", "1")
 
     # Force reimport to pick up new DB_PATH
     for mod_name in list(sys.modules):
@@ -297,6 +312,39 @@ class TestAdminQueue:
         resp = client.get("/admin/queue", headers=admin["headers"])
         assert resp.status_code == 200
         assert "items" in resp.json()
+
+    def test_admin_safety_endpoint(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        admin = _register_and_auth(api_server, monkeypatch, is_admin=True)
+        resp = client.get("/admin/safety", headers=admin["headers"])
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["state"] == "healthy"
+        assert data["enforced"] is True
+
+    def test_admin_approve_blocked_when_shadow_unknown(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        admin = _register_and_auth(api_server, monkeypatch, is_admin=True)
+        user = _register_and_auth(api_server)
+
+        content = "Structured content that would otherwise be approved."
+        sig, signed_at = _sign_content(user, content)
+        resp = client.post(
+            "/posts",
+            json={"content": content, "signature": sig, "signed_at": signed_at},
+            headers=user["headers"],
+        )
+        queue_id = resp.json()["queue_id"]
+
+        monkeypatch.setenv("SAB_SHADOW_SUMMARY_PATH", str(Path("/tmp/does-not-exist-shadow-summary.json")))
+        resp = client.post(
+            f"/admin/approve/{queue_id}",
+            json={"reason": "blocked-by-shadow-state"},
+            headers=admin["headers"],
+        )
+        assert resp.status_code == 503
+        assert resp.json()["detail"]["error"] == "safety_gate_blocked"
+        assert resp.json()["detail"]["state"] == "unknown"
 
     def test_non_admin_blocked(self, fresh_app, monkeypatch):
         client, api_server, _ = fresh_app

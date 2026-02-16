@@ -10,6 +10,8 @@ BASE_URL="http://${HOST}:${PORT}"
 DB_PATH="${REPO_ROOT}/data/smoke_sabp.db"
 JWT_SECRET_PATH="${REPO_ROOT}/data/.jwt_secret_smoke"
 LOG_PATH="${REPO_ROOT}/data/smoke_server.log"
+SHADOW_DIR="${REPO_ROOT}/agora/logs/shadow_loop"
+SHADOW_SUMMARY_PATH="${SHADOW_DIR}/run_summary.json"
 
 read -r SMOKE_ADMIN_PRIV SMOKE_ADMIN_PUB < <(
   python3 - <<'PY'
@@ -27,11 +29,19 @@ export SAB_ADMIN_ALLOWLIST="${SMOKE_ADMIN_PUB}"
 export SAB_HOST="${HOST}"
 export SAB_PORT="${PORT}"
 export SAB_RELOAD=0
+export SAB_SHADOW_SUMMARY_PATH="${SHADOW_SUMMARY_PATH}"
+export SAB_SHADOW_FAIL_CLOSED=1
 export BASE_URL
 export SMOKE_ADMIN_PRIV
 export SMOKE_ADMIN_PUB
 
 rm -f "${DB_PATH}" "${LOG_PATH}"
+python3 scripts/orthogonal_safety_loop.py --output-dir "${SHADOW_DIR}" >/dev/null
+
+if [[ ! -f "${SHADOW_SUMMARY_PATH}" ]]; then
+  echo "FAIL: missing shadow-loop summary at ${SHADOW_SUMMARY_PATH}"
+  exit 1
+fi
 
 SERVER_PID=""
 cleanup() {
@@ -108,4 +118,3 @@ finally:
 PY
 
 echo "PASS"
-

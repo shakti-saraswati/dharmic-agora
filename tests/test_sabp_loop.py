@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import sys
 from pathlib import Path
 
@@ -21,9 +22,23 @@ if str(_REPO_ROOT) not in sys.path:
 def fresh_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Import a fresh api_server with an isolated DB + JWT secret."""
     db_path = tmp_path / "sabp_loop.db"
+    shadow_summary = tmp_path / "shadow_loop" / "run_summary.json"
+    shadow_summary.parent.mkdir(parents=True, exist_ok=True)
+    shadow_summary.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-02-16T00:00:00+00:00",
+                "status": "stable",
+                "alert_count": 0,
+                "high_alert_count": 0,
+            }
+        )
+    )
     monkeypatch.setenv("SAB_DB_PATH", str(db_path))
     monkeypatch.setenv("SAB_JWT_SECRET", str(tmp_path / ".jwt_secret"))
     monkeypatch.setenv("SAB_ADMIN_ALLOWLIST", "")
+    monkeypatch.setenv("SAB_SHADOW_SUMMARY_PATH", str(shadow_summary))
+    monkeypatch.setenv("SAB_SHADOW_FAIL_CLOSED", "1")
 
     # Force a clean import so module-level singletons pick up env vars.
     for mod_name in list(sys.modules):
@@ -118,5 +133,58 @@ def test_sabp_core_loop_queue_approve_witness(fresh_api, monkeypatch: pytest.Mon
             post = r.json()
             assert post["id"] == post_id
             assert post["content"] == content
+
+    asyncio.run(run())
+
+
+def test_admin_safety_endpoint_and_fail_closed(fresh_api, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    async def run() -> None:
+        transport = httpx.ASGITransport(app=fresh_api.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            # Seed one queued post.
+            r = await client.post("/auth/token", json={"name": "t1-agent", "telos": "testing"})
+            assert r.status_code == 200
+            t1_token = r.json()["token"]
+            r = await client.post(
+                "/posts",
+                headers={"Authorization": f"Bearer {t1_token}"},
+                json={"content": "## Block Check\n\nContent with structure.\n\n```python\nprint('x')\n```"},
+            )
+            assert r.status_code == 201
+            queue_id = r.json()["queue_id"]
+
+            # Register/admin-auth.
+            sk = SigningKey.generate()
+            pubkey_hex = sk.verify_key.encode(encoder=HexEncoder).decode()
+            monkeypatch.setenv("SAB_ADMIN_ALLOWLIST", pubkey_hex)
+
+            r = await client.post("/auth/register", json={"name": "admin", "pubkey": pubkey_hex, "telos": "admin"})
+            assert r.status_code == 200
+            admin_address = r.json()["address"]
+
+            r = await client.get("/auth/challenge", params={"address": admin_address})
+            assert r.status_code == 200
+            signature_hex = sk.sign(bytes.fromhex(r.json()["challenge"])).signature.hex()
+            r = await client.post("/auth/verify", json={"address": admin_address, "signature": signature_hex})
+            assert r.status_code == 200
+            admin_jwt = r.json()["token"]
+            admin_headers = {"Authorization": f"Bearer {admin_jwt}"}
+
+            # Stable seeded summary should be visible and healthy.
+            r = await client.get("/admin/safety", headers=admin_headers)
+            assert r.status_code == 200
+            assert r.json()["state"] == "healthy"
+
+            # Switch summary path to missing file -> privileged write should fail closed.
+            monkeypatch.setenv("SAB_SHADOW_SUMMARY_PATH", str(tmp_path / "missing" / "run_summary.json"))
+            r = await client.post(
+                f"/admin/approve/{queue_id}",
+                headers=admin_headers,
+                json={"reason": "should be blocked"},
+            )
+            assert r.status_code == 503
+            detail = r.json()["detail"]
+            assert detail["error"] == "safety_gate_blocked"
+            assert detail["state"] == "unknown"
 
     asyncio.run(run())
