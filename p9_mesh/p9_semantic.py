@@ -23,6 +23,12 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 import argparse
 
+try:
+    from agora.db_config import DB_PATHS
+except ImportError:  # pragma: no cover
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from agora.db_config import DB_PATHS
+
 # Embedding model configuration
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
@@ -31,8 +37,8 @@ EMBEDDING_DIM = 384
 class SemanticIndexer:
     """Handles embedding generation and vector indexing"""
     
-    def __init__(self, db_path: str = "unified_memory.db"):
-        self.db_path = Path(db_path)
+    def __init__(self, db_path: str | None = None):
+        self.db_path = Path(db_path) if db_path else Path(DB_PATHS["p9_memory"])
         self.conn = None
         self.model = None
         
@@ -229,8 +235,8 @@ class SemanticIndexer:
 class SemanticSearcher:
     """Handles semantic and hybrid search"""
     
-    def __init__(self, db_path: str = "unified_memory.db"):
-        self.db_path = Path(db_path)
+    def __init__(self, db_path: str | None = None):
+        self.db_path = Path(db_path) if db_path else Path(DB_PATHS["p9_memory"])
         self.conn = None
         self.model = None
         
@@ -458,8 +464,8 @@ def main():
     )
     parser.add_argument(
         "--db",
-        default="unified_memory.db",
-        help="Database path (default: unified_memory.db)"
+        default=str(DB_PATHS["p9_memory"]),
+        help="Database path (default: data/p9_memory.db)"
     )
     
     subparsers = parser.add_subparsers(dest="command", help="Command to run")

@@ -48,6 +48,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+try:
+    from agora.db_config import DB_PATHS
+except ImportError:  # pragma: no cover
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from agora.db_config import DB_PATHS
+
 # Try to import nats, provide helpful error if not available
 try:
     import nats
@@ -60,7 +68,10 @@ except ImportError:
     print("   python3 p9_nats_bridge.py --test-mode")
 
 # Import our search module
-from p9_search import P9Searcher
+try:
+    from .p9_search import P9Searcher
+except ImportError:  # pragma: no cover
+    from p9_search import P9Searcher  # type: ignore
 
 
 class P9NatsBridge:
@@ -296,8 +307,8 @@ def main():
     )
     parser.add_argument(
         "--db",
-        default="unified_memory.db",
-        help="Path to unified_memory.db (default: unified_memory.db)"
+        default=str(DB_PATHS["p9_memory"]),
+        help="Path to P9 memory DB (default: data/p9_memory.db)"
     )
     parser.add_argument(
         "--nats",

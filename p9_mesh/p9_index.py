@@ -24,6 +24,12 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from agora.db_config import DB_PATHS
+except ImportError:  # pragma: no cover
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from agora.db_config import DB_PATHS
+
 # File types to index
 INDEXABLE_EXTENSIONS = {
     '.md', '.txt', '.py', '.js', '.ts', '.json', '.yaml', '.yml',
@@ -34,9 +40,9 @@ INDEXABLE_EXTENSIONS = {
 SKIP_DIRS = {'.git', '__pycache__', '.venv', 'node_modules', '.pytest_cache', 'dist', 'build'}
 
 class P9Indexer:
-    def __init__(self, workspace_path, db_path="unified_memory.db"):
+    def __init__(self, workspace_path, db_path=None):
         self.workspace = Path(workspace_path).resolve()
-        self.db_path = Path(db_path)
+        self.db_path = Path(db_path) if db_path else Path(DB_PATHS["p9_memory"])
         self.conn = None
         
     def init_database(self):
@@ -266,11 +272,11 @@ class P9Indexer:
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 p9_index.py /path/to/workspace [--db /path/to/db]")
-        print("Example: python3 p9_index.py /home/openclaw/workspace --db unified_memory.db")
+        print("Example: python3 p9_index.py /home/openclaw/workspace --db data/p9_memory.db")
         sys.exit(1)
         
     workspace = sys.argv[1]
-    db_path = "unified_memory.db"
+    db_path = str(DB_PATHS["p9_memory"])
     
     # Parse optional --db argument
     if "--db" in sys.argv:

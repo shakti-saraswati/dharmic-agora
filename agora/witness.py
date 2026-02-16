@@ -2,6 +2,12 @@
 SAB Witness Chain
 
 Hash-chained audit log for tamper-evident moderation decisions and system actions.
+
+WITNESS LAYER BOUNDARY:
+- This module is the SABP witness (publication provenance): queue decisions,
+  moderation transitions, and runtime/admin actions in the API layer.
+- Artifact derivation provenance is intentionally separate and lives in
+  `agent_core/core/witness_event.py`.
 """
 
 from __future__ import annotations

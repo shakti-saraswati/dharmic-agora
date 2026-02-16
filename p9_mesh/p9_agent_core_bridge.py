@@ -25,6 +25,13 @@ import argparse
 import sqlite3
 from pathlib import Path
 
+try:
+    from agora.db_config import DB_PATHS
+except ImportError:  # pragma: no cover
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from agora.db_config import DB_PATHS
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -39,7 +46,7 @@ def _default_agent_core_root() -> Path:
 def _default_db_path() -> Path:
     import os
 
-    return Path(os.getenv("P9_DB_PATH", str(_repo_root() / "p9_mesh" / "p9_agent_core.db")))
+    return Path(os.getenv("P9_DB_PATH", str(DB_PATHS["p9_agent_core"])))
 
 
 class P9AgentCoreBridge:
@@ -222,4 +229,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -16,6 +16,14 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Optional
 
+try:
+    from agora.db_config import DB_PATHS
+except ImportError:  # pragma: no cover
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from agora.db_config import DB_PATHS
+
 @dataclass
 class SearchResult:
     path: str
@@ -27,7 +35,7 @@ class UnifiedQuery:
     """Query across all nodes in the mesh"""
     
     def __init__(self):
-        self.local_db = Path("p9_memory.db")
+        self.local_db = Path(DB_PATHS["p9_memory"])
         self.agni_nats_subject = "agni.memory.search"
         self.rushab_nats_subject = "rushabdev.memory.search"
         

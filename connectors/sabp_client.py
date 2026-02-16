@@ -43,6 +43,12 @@ class SabpClient:
         if self._owns_client:
             self._client.close()
 
+    def health_check(self) -> dict[str, Any]:
+        """Check SABP server health endpoint."""
+        r = self._client.get("/health")
+        r.raise_for_status()
+        return r.json()
+
     # --- Tier-1 / Tier-2 bootstrap ---
     def issue_token(self, name: str, telos: str = "") -> dict[str, Any]:
         r = self._client.post("/auth/token", json={"name": name, "telos": telos})
@@ -99,13 +105,21 @@ class SabpClient:
         r.raise_for_status()
         return r.json()
 
-    def admin_approve(self, queue_id: int) -> dict[str, Any]:
-        r = self._client.post(f"/admin/approve/{queue_id}", headers=self.auth.headers())
+    def admin_approve(self, queue_id: int, reason: str | None = None) -> dict[str, Any]:
+        r = self._client.post(
+            f"/admin/approve/{queue_id}",
+            headers=self.auth.headers(),
+            json={"reason": reason},
+        )
         r.raise_for_status()
         return r.json()
 
-    def admin_reject(self, queue_id: int) -> dict[str, Any]:
-        r = self._client.post(f"/admin/reject/{queue_id}", headers=self.auth.headers())
+    def admin_reject(self, queue_id: int, reason: str | None = None) -> dict[str, Any]:
+        r = self._client.post(
+            f"/admin/reject/{queue_id}",
+            headers=self.auth.headers(),
+            json={"reason": reason},
+        )
         r.raise_for_status()
         return r.json()
 
@@ -128,6 +142,12 @@ class SabpAsyncClient:
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+    async def health_check(self) -> dict[str, Any]:
+        """Check SABP server health endpoint."""
+        r = await self._client.get("/health")
+        r.raise_for_status()
+        return r.json()
 
     async def issue_token(self, name: str, telos: str = "") -> dict[str, Any]:
         r = await self._client.post("/auth/token", json={"name": name, "telos": telos})

@@ -21,10 +21,16 @@ import re
 from pathlib import Path
 from typing import List, Dict, Any
 
+try:
+    from agora.db_config import DB_PATHS
+except ImportError:  # pragma: no cover
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from agora.db_config import DB_PATHS
+
 
 class P9Searcher:
-    def __init__(self, db_path="unified_memory.db"):
-        self.db_path = Path(db_path)
+    def __init__(self, db_path=None):
+        self.db_path = Path(db_path) if db_path else Path(DB_PATHS["p9_memory"])
         self.conn = None
         
     def connect(self):
@@ -213,7 +219,7 @@ def main():
         print("Usage: python3 p9_search.py \"your query\" [options]")
         print()
         print("Options:")
-        print("  --db PATH        Database path (default: unified_memory.db)")
+        print("  --db PATH        Database path (default: data/p9_memory.db)")
         print("  --top-k N        Number of results (default: 10)")
         print("  --no-snippets    Don't show text snippets")
         print("  --stats          Show database statistics only")
@@ -229,7 +235,7 @@ def main():
     
     # Check for --stats
     if "--stats" in args:
-        db_path = "unified_memory.db"
+        db_path = str(DB_PATHS["p9_memory"])
         if "--db" in args:
             idx = args.index("--db")
             if idx + 1 < len(args):
@@ -252,7 +258,7 @@ def main():
     
     # Get query (first non-flag argument)
     query = None
-    db_path = "unified_memory.db"
+    db_path = str(DB_PATHS["p9_memory"])
     top_k = 10
     show_snippets = True
     

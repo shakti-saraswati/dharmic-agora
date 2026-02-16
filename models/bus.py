@@ -16,13 +16,25 @@ class ModelBus:
     interface instead of hard-coding vendor SDKs.
     """
 
-    def __init__(self, cfg: ModelBusConfig):
+    def __init__(self, cfg: ModelBusConfig, base_url: str | None = None):
         self.cfg = cfg
+        self.base_url = base_url.rstrip("/") if base_url else None
         self._providers: dict[str, Any] = {}
 
+    def health_check(self) -> dict[str, Any]:
+        """Lightweight, mock-friendly readiness check."""
+        return {
+            "status": "ok",
+            "providers": sorted(self.cfg.providers.keys()),
+            "roles": sorted(self.cfg.roles.keys()),
+            "provider_count": len(self.cfg.providers),
+            "role_count": len(self.cfg.roles),
+            "base_url_override": self.base_url,
+        }
+
     @classmethod
-    def load(cls, path: Path) -> "ModelBus":
-        return cls(load_config(path))
+    def load(cls, path: Path, base_url: str | None = None) -> "ModelBus":
+        return cls(load_config(path), base_url=base_url)
 
     def provider(self, name: str) -> Any:
         if name in self._providers:
@@ -37,7 +49,10 @@ class ModelBus:
         if kind == "echo":
             inst = EchoProvider(name=name)
         elif kind == "ollama":
-            inst = OllamaProvider(base_url=p.base_url or "http://localhost:11434", timeout_s=p.timeout_s)
+            inst = OllamaProvider(
+                base_url=self.base_url or p.base_url or "http://localhost:11434",
+                timeout_s=p.timeout_s,
+            )
         elif kind in {"openai_compatible", "openai-compatible", "openai"}:
             import os
 
@@ -47,7 +62,7 @@ class ModelBus:
             if not api_key:
                 raise ValueError(f"env var {p.api_key_env} not set for provider {name}")
             inst = OpenAICompatibleProvider(
-                base_url=(p.base_url or "https://api.openai.com/v1").rstrip("/"),
+                base_url=(self.base_url or p.base_url or "https://api.openai.com/v1").rstrip("/"),
                 api_key=api_key,
                 timeout_s=p.timeout_s,
             )

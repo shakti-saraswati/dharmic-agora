@@ -15,8 +15,16 @@ import hashlib
 from pathlib import Path
 from datetime import datetime
 
+try:
+    from agora.db_config import DB_PATHS
+except ImportError:  # pragma: no cover
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from agora.db_config import DB_PATHS
+
 # Paths
-P9_DB = Path("p9_memory.db")
+P9_DB = Path(DB_PATHS["p9_memory"])
 CARTOGRAPHER_DIR = Path("../../docs/cartographer")  # Where inventory files live
 
 class CartographerBridge:

@@ -7,6 +7,12 @@ This is intentionally minimal:
   - per-event SHA256 hash
 
 It gives you "no silent edits" for any pipeline step that mutates state.
+
+WITNESS LAYER BOUNDARY:
+- This module is the agent_core witness (artifact derivation provenance):
+  transformation/ingestion events inside capability pipelines.
+- Publication/moderation provenance is intentionally separate and lives in
+  `agora/witness.py`.
 """
 
 from __future__ import annotations
@@ -154,4 +160,3 @@ def verify_log(log_path: Path | str) -> Dict[str, Any]:
         prev_hash = actual_hash
 
     return {"valid": not errors, "records": records, "errors": errors, "last_hash": prev_hash}
-

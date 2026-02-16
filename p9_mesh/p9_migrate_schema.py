@@ -13,6 +13,12 @@ import sqlite3
 import sys
 from pathlib import Path
 
+try:
+    from agora.db_config import DB_PATHS
+except ImportError:  # pragma: no cover
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from agora.db_config import DB_PATHS
+
 
 def migrate(db_path: str):
     """Migrate P9 database to support semantic search"""
@@ -135,7 +141,7 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="Migrate P9 database schema")
-    parser.add_argument("--db", default="p9_memory.db", help="Database path")
+    parser.add_argument("--db", default=str(DB_PATHS["p9_memory"]), help="Database path")
     
     args = parser.parse_args()
     
