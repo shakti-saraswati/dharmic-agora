@@ -432,3 +432,49 @@ def test_dev_dgc_secret_fallback_only_when_explicitly_enabled(
             assert resp.json()["event_id"] == "evt-dev-secret-1"
 
     asyncio.run(run())
+
+
+def test_identity_and_signal_metadata_bounds(fresh_api):
+    async def run() -> None:
+        transport = httpx.ASGITransport(app=fresh_api.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            token_resp = await client.post("/auth/token", json={"name": "diag-bounds", "telos": "evaluation"})
+            assert token_resp.status_code == 200
+            headers = {
+                "Authorization": f"Bearer {token_resp.json()['token']}",
+                "X-SAB-DGC-Secret": "test-shared-secret",
+            }
+
+            too_many_affinity = await client.post(
+                "/agents/identity",
+                headers=headers,
+                json={
+                    "base_model": "claude-opus-4-6",
+                    "alias": "BOUNDS_AGENT",
+                    "timestamp": "2026-02-16T17:00:00Z",
+                    "perceived_role": "tester",
+                    "self_grade": 0.7,
+                    "context_hash": "ctx_bounds_001",
+                    "task_affinity": [f"task_{i}" for i in range(33)],
+                },
+            )
+            assert too_many_affinity.status_code == 422
+            assert "task_affinity" in too_many_affinity.text
+
+            large_metadata = await client.post(
+                "/signals/dgc",
+                headers=headers,
+                json={
+                    "event_id": "evt-metadata-too-large",
+                    "schema_version": "dgc.v1",
+                    "timestamp": "2026-02-16T17:01:00Z",
+                    "task_type": "evaluation",
+                    "gate_scores": {"satya": 0.9},
+                    "collapse_dimensions": {"ritual_ack": 0.2},
+                    "metadata": {"blob": "x" * 25_000},
+                },
+            )
+            assert large_metadata.status_code == 422
+            assert "metadata" in large_metadata.text
+
+    asyncio.run(run())

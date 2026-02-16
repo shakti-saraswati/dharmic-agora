@@ -477,6 +477,34 @@ class AuditEntry(BaseModel):
     data_hash: str
 
 
+def _validate_metadata_map(
+    value: Dict[str, Any],
+    *,
+    field_name: str,
+    max_items: int,
+    max_key_len: int,
+    max_json_bytes: int,
+) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object")
+    if len(value) > max_items:
+        raise ValueError(f"{field_name} exceeds max entries ({max_items})")
+    for key in value.keys():
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError(f"{field_name} keys must be non-empty strings")
+        if len(key) > max_key_len:
+            raise ValueError(f"{field_name} keys must be <= {max_key_len} chars")
+    try:
+        encoded = json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be JSON-serializable") from exc
+    if len(encoded) > max_json_bytes:
+        raise ValueError(f"{field_name} exceeds max JSON size ({max_json_bytes} bytes)")
+    return value
+
+
 class GateStatus(BaseModel):
     active_dimensions: List[str]
     total_active: int
@@ -492,6 +520,39 @@ class AgentIdentityRequest(BaseModel):
     context_hash: str = Field(..., min_length=8, max_length=256)
     task_affinity: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("task_affinity")
+    @classmethod
+    def validate_task_affinity(cls, value: List[str]) -> List[str]:
+        if len(value) > 32:
+            raise ValueError("task_affinity exceeds max entries (32)")
+        deduped: List[str] = []
+        seen: set[str] = set()
+        for item in value:
+            if not isinstance(item, str):
+                raise ValueError("task_affinity entries must be strings")
+            normalized = item.strip()
+            if not normalized:
+                raise ValueError("task_affinity entries must be non-empty")
+            if len(normalized) > 80:
+                raise ValueError("task_affinity entries must be <= 80 chars")
+            key = normalized.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(normalized)
+        return deduped
+
+    @field_validator("metadata")
+    @classmethod
+    def validate_identity_metadata(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        return _validate_metadata_map(
+            value,
+            field_name="metadata",
+            max_items=64,
+            max_key_len=80,
+            max_json_bytes=16_384,
+        )
 
 
 class DGCSignalRequest(BaseModel):
@@ -545,6 +606,17 @@ class DGCSignalRequest(BaseModel):
     @classmethod
     def validate_collapse_dimensions(cls, value: Dict[str, float]) -> Dict[str, float]:
         return cls._validate_score_map(value, "collapse_dimensions")
+
+    @field_validator("metadata")
+    @classmethod
+    def validate_signal_metadata(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        return _validate_metadata_map(
+            value,
+            field_name="metadata",
+            max_items=96,
+            max_key_len=80,
+            max_json_bytes=24_576,
+        )
 
 
 class DGCSignalResponse(BaseModel):
@@ -1147,9 +1219,11 @@ async def admin_queue(
     _require_admin(agent)
     items = _moderation.list_queue(status=status_filter, limit=limit, offset=offset)
     if include_trust:
+        latest_trust = _convergence.latest_trust_for_agents(
+            [str(item.get("author_address", "")) for item in items]
+        )
         for item in items:
-            history = _convergence.trust_history(item["author_address"], limit=1)
-            latest = history[0] if history else None
+            latest = latest_trust.get(str(item["author_address"]))
             item["trust_gradient"] = (
                 {
                     "trust_score": latest["trust_score"],

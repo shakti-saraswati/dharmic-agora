@@ -475,6 +475,16 @@ class ConvergenceStore:
             "diagnostic": diagnostic,
         }
 
+    def _decode_trust_row(self, row: sqlite3.Row | Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(row)
+        out["weak_gates"] = self._parse_json(out.pop("weak_gates_json"), [])
+        out["strong_gates"] = self._parse_json(out.pop("strong_gates_json"), [])
+        out["high_collapse"] = self._parse_json(out.pop("high_collapse_json"), [])
+        out["likely_causes"] = self._parse_json(out.pop("likely_causes_json"), [])
+        out["diagnostic"] = self._parse_json(out.pop("diagnostic_json"), {})
+        out["low_trust_flag"] = bool(out["low_trust_flag"])
+        return out
+
     def _fetch_trust_by_event(self, signal_event_id: str) -> Optional[Dict[str, Any]]:
         with self._conn() as conn:
             cursor = conn.cursor()
@@ -485,14 +495,7 @@ class ConvergenceStore:
             row = cursor.fetchone()
         if not row:
             return None
-        out = dict(row)
-        out["weak_gates"] = self._parse_json(out.pop("weak_gates_json"), [])
-        out["strong_gates"] = self._parse_json(out.pop("strong_gates_json"), [])
-        out["high_collapse"] = self._parse_json(out.pop("high_collapse_json"), [])
-        out["likely_causes"] = self._parse_json(out.pop("likely_causes_json"), [])
-        out["diagnostic"] = self._parse_json(out.pop("diagnostic_json"), {})
-        out["low_trust_flag"] = bool(out["low_trust_flag"])
-        return out
+        return self._decode_trust_row(row)
 
     def ingest_and_score(
         self,
@@ -602,16 +605,44 @@ class ConvergenceStore:
             )
             rows = cursor.fetchall()
 
-        out: List[Dict[str, Any]] = []
+        return [self._decode_trust_row(row) for row in rows]
+
+    def latest_trust_for_agents(self, agent_addresses: List[str]) -> Dict[str, Dict[str, Any]]:
+        deduped: List[str] = []
+        seen: set[str] = set()
+        for address in agent_addresses:
+            normalized = str(address or "").strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped.append(normalized)
+        if not deduped:
+            return {}
+
+        placeholders = ",".join("?" for _ in deduped)
+        with self._conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT t.*
+                FROM trust_gradients t
+                JOIN (
+                    SELECT agent_address, MAX(id) AS max_id
+                    FROM trust_gradients
+                    WHERE agent_address IN ({placeholders})
+                    GROUP BY agent_address
+                ) latest
+                ON latest.agent_address = t.agent_address
+                AND latest.max_id = t.id
+                """,
+                tuple(deduped),
+            )
+            rows = cursor.fetchall()
+
+        out: Dict[str, Dict[str, Any]] = {}
         for row in rows:
-            item = dict(row)
-            item["weak_gates"] = self._parse_json(item.pop("weak_gates_json"), [])
-            item["strong_gates"] = self._parse_json(item.pop("strong_gates_json"), [])
-            item["high_collapse"] = self._parse_json(item.pop("high_collapse_json"), [])
-            item["likely_causes"] = self._parse_json(item.pop("likely_causes_json"), [])
-            item["diagnostic"] = self._parse_json(item.pop("diagnostic_json"), {})
-            item["low_trust_flag"] = bool(item["low_trust_flag"])
-            out.append(item)
+            decoded = self._decode_trust_row(row)
+            out[str(decoded["agent_address"])] = decoded
         return out
 
     def landscape(self, limit: int = 200) -> Dict[str, Any]:

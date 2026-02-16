@@ -167,3 +167,44 @@ def test_dgc_schema_version_guard(fresh_app):
         },
     )
     assert bad.status_code == 422
+
+
+def test_identity_and_signal_metadata_contract_bounds(fresh_app):
+    client = fresh_app
+    token_resp = client.post("/auth/token", json={"name": "agent-conv-bounds", "telos": "evaluation"})
+    assert token_resp.status_code == 200
+    token = token_resp.json()["token"]
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-SAB-DGC-Secret": "test-shared-secret",
+    }
+
+    identity_bad = client.post(
+        "/agents/identity",
+        headers=headers,
+        json={
+            "base_model": "claude-opus-4-6",
+            "alias": "BOUNDS",
+            "timestamp": "2026-02-16T14:35:00Z",
+            "perceived_role": "tester",
+            "self_grade": 0.7,
+            "context_hash": "ctx_bounds_sync",
+            "task_affinity": [f"task_{i}" for i in range(40)],
+        },
+    )
+    assert identity_bad.status_code == 422
+
+    signal_bad = client.post(
+        "/signals/dgc",
+        headers=headers,
+        json={
+            "event_id": "evt-bad-metadata-sync",
+            "schema_version": "dgc.v1",
+            "timestamp": "2026-02-16T14:36:00Z",
+            "task_type": "evaluation",
+            "gate_scores": {"satya": 0.9},
+            "collapse_dimensions": {"ritual_ack": 0.2},
+            "metadata": {"blob": "x" * 25000},
+        },
+    )
+    assert signal_bad.status_code == 422

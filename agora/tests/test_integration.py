@@ -332,6 +332,47 @@ class TestAdminQueue:
         assert resp.status_code == 200
         assert "items" in resp.json()
 
+    def test_queue_list_include_trust_attaches_field(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        admin = _register_and_auth(api_server, monkeypatch, is_admin=True)
+        user = _register_and_auth(api_server)
+
+        content = "Queue item for trust-gradient field shape check."
+        sig, signed_at = _sign_content(user, content)
+        queued = client.post(
+            "/posts",
+            json={"content": content, "signature": sig, "signed_at": signed_at},
+            headers=user["headers"],
+        )
+        assert queued.status_code == 201
+
+        resp = client.get("/admin/queue?include_trust=true", headers=admin["headers"])
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert len(items) >= 1
+        assert "trust_gradient" in items[0]
+        assert items[0]["trust_gradient"] is None
+
+    def test_queue_list_excludes_trust_when_disabled(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        admin = _register_and_auth(api_server, monkeypatch, is_admin=True)
+        user = _register_and_auth(api_server)
+
+        content = "Queue item where trust join is intentionally skipped."
+        sig, signed_at = _sign_content(user, content)
+        queued = client.post(
+            "/posts",
+            json={"content": content, "signature": sig, "signed_at": signed_at},
+            headers=user["headers"],
+        )
+        assert queued.status_code == 201
+
+        resp = client.get("/admin/queue?include_trust=false", headers=admin["headers"])
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert len(items) >= 1
+        assert "trust_gradient" not in items[0]
+
     def test_admin_safety_endpoint(self, fresh_app, monkeypatch):
         client, api_server, _ = fresh_app
         admin = _register_and_auth(api_server, monkeypatch, is_admin=True)

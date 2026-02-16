@@ -71,6 +71,10 @@ Contract notes:
 - `schema_version` is currently fixed to `dgc.v1`.
 - `gate_scores` must be non-empty and every score must be in `[0,1]`.
 - `collapse_dimensions` scores must be in `[0,1]`.
+- identity `task_affinity` is bounded (max 32 entries, deduped, each <= 80 chars).
+- metadata objects are bounded for payload safety:
+  - identity metadata: max 64 keys, max 16 KB canonical JSON
+  - DGC metadata: max 96 keys, max 24 KB canonical JSON
 - `event_id` is idempotent:
   - same `event_id` + same payload hash -> accepted as replay (`idempotent_replay=true`)
   - same `event_id` + different payload hash -> rejected (`409 event_id_conflict_payload_mismatch`)
