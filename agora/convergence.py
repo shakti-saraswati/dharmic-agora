@@ -274,6 +274,8 @@ class ConvergenceStore:
         metadata = payload.get("metadata", {})
         if not isinstance(metadata, dict):
             metadata = {"metadata_raw": str(metadata)}
+        schema_version = str(payload.get("schema_version") or "dgc.v1")
+        metadata.setdefault("schema_version", schema_version)
 
         mission_relevance = payload.get("mission_relevance")
         mission_value: Optional[float] = None
@@ -282,6 +284,7 @@ class ConvergenceStore:
 
         return {
             "event_id": str(payload["event_id"]),
+            "schema_version": schema_version,
             "agent_address": agent_address,
             "signal_timestamp": str(payload["timestamp"]),
             "task_id": str(payload.get("task_id") or "") or None,
@@ -311,6 +314,11 @@ class ConvergenceStore:
             existing = cursor.fetchone()
             if existing:
                 row = dict(existing)
+                if row.get("agent_address") != agent_address:
+                    raise ValueError("event_id_conflict_agent_mismatch")
+                if row.get("payload_hash") != payload_hash:
+                    raise ValueError("event_id_conflict_payload_mismatch")
+                idempotent_replay = True
             else:
                 cursor.execute(
                     """
@@ -341,10 +349,12 @@ class ConvergenceStore:
                 signal_id = cursor.lastrowid
                 cursor.execute("SELECT * FROM dgc_signals WHERE id = ?", (signal_id,))
                 row = dict(cursor.fetchone())
+                idempotent_replay = False
 
         row["gate_scores"] = self._parse_json(row.pop("gate_scores_json"), {})
         row["collapse_dimensions"] = self._parse_json(row.pop("collapse_dimensions_json"), {})
         row["metadata"] = self._parse_json(row.pop("metadata_json"), {})
+        row["_idempotent_replay"] = idempotent_replay
         return row
 
     @staticmethod
@@ -487,7 +497,11 @@ class ConvergenceStore:
 
         existing = self._fetch_trust_by_event(signal["event_id"])
         if existing:
-            return {"signal": signal, "gradient": existing}
+            return {
+                "signal": signal,
+                "gradient": existing,
+                "idempotent_replay": bool(signal.get("_idempotent_replay", True)),
+            }
 
         identity = self.latest_identity(agent_address)
         gradient = self._derive_gradient(signal=signal, identity=identity)
@@ -528,7 +542,11 @@ class ConvergenceStore:
             )
 
         stored = self._fetch_trust_by_event(signal["event_id"])
-        return {"signal": signal, "gradient": stored}
+        return {
+            "signal": signal,
+            "gradient": stored,
+            "idempotent_replay": bool(signal.get("_idempotent_replay", False)),
+        }
 
     def trust_history(self, agent_address: str, limit: int = 50) -> List[Dict[str, Any]]:
         with self._conn() as conn:

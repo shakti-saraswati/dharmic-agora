@@ -13,6 +13,7 @@ Run: uvicorn agora.api_server:app --reload
 import hashlib
 import hmac
 import json
+import math
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -22,7 +23,7 @@ from contextlib import contextmanager
 
 from fastapi import FastAPI, HTTPException, Depends, Header, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # Import core modules (allow running from repo root too)
 try:
@@ -495,6 +496,7 @@ class AgentIdentityRequest(BaseModel):
 
 class DGCSignalRequest(BaseModel):
     event_id: str = Field(..., min_length=3, max_length=160)
+    schema_version: str = Field("dgc.v1", min_length=3, max_length=32)
     timestamp: str = Field(..., min_length=10, max_length=64)
     task_id: Optional[str] = Field(None, max_length=160)
     task_type: Optional[str] = Field(None, max_length=160)
@@ -506,11 +508,51 @@ class DGCSignalRequest(BaseModel):
     signature: Optional[str] = Field(None, max_length=512)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, value: str) -> str:
+        if value != "dgc.v1":
+            raise ValueError("Unsupported schema_version; expected dgc.v1")
+        return value
+
+    @staticmethod
+    def _validate_score_map(value: Dict[str, float], field_name: str) -> Dict[str, float]:
+        if not isinstance(value, dict):
+            raise ValueError(f"{field_name} must be a map")
+        if field_name == "gate_scores" and not value:
+            raise ValueError("gate_scores must include at least one gate")
+        if len(value) > 256:
+            raise ValueError(f"{field_name} exceeds max size")
+        for key, score in value.items():
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError(f"{field_name} keys must be non-empty strings")
+            if len(key) > 120:
+                raise ValueError(f"{field_name} keys must be <= 120 chars")
+            if not isinstance(score, (int, float)):
+                raise ValueError(f"{field_name} values must be numeric")
+            if math.isnan(float(score)) or math.isinf(float(score)):
+                raise ValueError(f"{field_name} values must be finite")
+            if float(score) < 0.0 or float(score) > 1.0:
+                raise ValueError(f"{field_name} values must be in [0,1]")
+        return value
+
+    @field_validator("gate_scores")
+    @classmethod
+    def validate_gate_scores(cls, value: Dict[str, float]) -> Dict[str, float]:
+        return cls._validate_score_map(value, "gate_scores")
+
+    @field_validator("collapse_dimensions")
+    @classmethod
+    def validate_collapse_dimensions(cls, value: Dict[str, float]) -> Dict[str, float]:
+        return cls._validate_score_map(value, "collapse_dimensions")
+
 
 class DGCSignalResponse(BaseModel):
     event_id: str
+    schema_version: str
     trust_score: float
     low_trust_flag: bool
+    idempotent_replay: bool
     likely_causes: List[str]
     weak_gates: List[str]
 
@@ -991,17 +1033,24 @@ async def ingest_dgc_signal(
             "payload_hash": payload_hash,
         },
     )
-    outcome = _convergence.ingest_and_score(
-        agent_address=agent["address"],
-        payload=payload,
-        payload_hash=payload_hash,
-        audit_hash=audit["data_hash"],
-    )
+    try:
+        outcome = _convergence.ingest_and_score(
+            agent_address=agent["address"],
+            payload=payload,
+            payload_hash=payload_hash,
+            audit_hash=audit["data_hash"],
+        )
+    except ValueError as exc:
+        if str(exc).startswith("event_id_conflict"):
+            raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))
     gradient = outcome["gradient"] or {}
     return DGCSignalResponse(
         event_id=req.event_id,
+        schema_version=req.schema_version,
         trust_score=float(gradient.get("trust_score", 0.0)),
         low_trust_flag=bool(gradient.get("low_trust_flag", False)),
+        idempotent_replay=bool(outcome.get("idempotent_replay", False)),
         likely_causes=list(gradient.get("likely_causes", [])),
         weak_gates=list(gradient.get("weak_gates", [])),
     )

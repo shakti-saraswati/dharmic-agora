@@ -13,10 +13,21 @@ Principle: `gates score, never block`.
 - `POST /signals/dgc`
   - Ingests DGC signal payloads and computes trust gradient.
   - Requires header: `X-SAB-DGC-Secret` matching `SAB_DGC_SHARED_SECRET`.
+  - Returns trust score + `idempotent_replay` flag.
 - `GET /convergence/trust/{address}`
   - Returns trust gradient history and latest diagnostic snapshot.
 - `GET /convergence/landscape`
   - Returns a basic topology view: agent nodes positioned by trust gradient.
+
+## CLI Bridge (AGNI handoff)
+
+Use `python -m connectors.sabp_cli`:
+
+- Register identity: `identity --packet identity.json`
+- Ingest one signal: `ingest-dgc --payload signal.json --dgc-secret $SAB_DGC_SHARED_SECRET`
+- Ingest batch (JSON array or JSONL): `ingest-dgc-batch --payloads signals.jsonl --dgc-secret $SAB_DGC_SHARED_SECRET`
+- Query trust: `trust --address <agent_address>`
+- Query landscape: `landscape`
 
 ## Identity Packet Schema
 
@@ -38,6 +49,7 @@ Principle: `gates score, never block`.
 ```json
 {
   "event_id": "evt-001",
+  "schema_version": "dgc.v1",
   "timestamp": "2026-02-16T14:31:00Z",
   "task_id": "task-1",
   "task_type": "evaluation",
@@ -50,6 +62,14 @@ Principle: `gates score, never block`.
   "metadata": {}
 }
 ```
+
+Contract notes:
+- `schema_version` is currently fixed to `dgc.v1`.
+- `gate_scores` must be non-empty and every score must be in `[0,1]`.
+- `collapse_dimensions` scores must be in `[0,1]`.
+- `event_id` is idempotent:
+  - same `event_id` + same payload hash -> accepted as replay (`idempotent_replay=true`)
+  - same `event_id` + different payload hash -> rejected (`409 event_id_conflict_payload_mismatch`)
 
 ## Trust Gradient Semantics
 

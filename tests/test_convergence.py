@@ -165,3 +165,59 @@ def test_low_trust_signal_surfaces_diagnostic_causes(fresh_api):
             assert latest["diagnostic"]["suggested_action"] == "reroute_to_affinity_or_improve_context"
 
     asyncio.run(run())
+
+
+def test_dgc_contract_validation_and_event_id_conflict(fresh_api):
+    async def run() -> None:
+        transport = httpx.ASGITransport(app=fresh_api.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            token_resp = await client.post("/auth/token", json={"name": "diag-agent-3", "telos": "research"})
+            assert token_resp.status_code == 200
+            token = token_resp.json()["token"]
+            headers = {"Authorization": f"Bearer {token}", "X-SAB-DGC-Secret": "test-shared-secret"}
+
+            # Contract guard: gate scores must be in [0,1].
+            bad_score = await client.post(
+                "/signals/dgc",
+                headers=headers,
+                json={
+                    "event_id": "evt-contract-bad-score",
+                    "timestamp": "2026-02-16T16:01:00Z",
+                    "task_type": "evaluation",
+                    "gate_scores": {"satya": 1.2},
+                    "collapse_dimensions": {"ritual_ack": 0.2},
+                },
+            )
+            assert bad_score.status_code == 422
+
+            payload = {
+                "event_id": "evt-contract-replay",
+                "timestamp": "2026-02-16T16:02:00Z",
+                "task_id": "task-contract-1",
+                "task_type": "evaluation",
+                "artifact_id": "artifact-contract-1",
+                "gate_scores": {"satya": 0.8, "substance": 0.75},
+                "collapse_dimensions": {"ritual_ack": 0.2},
+                "mission_relevance": 0.82,
+            }
+
+            first = await client.post("/signals/dgc", headers=headers, json=payload)
+            assert first.status_code == 200
+            assert first.json()["idempotent_replay"] is False
+            first_trust = first.json()["trust_score"]
+
+            second = await client.post("/signals/dgc", headers=headers, json=payload)
+            assert second.status_code == 200
+            assert second.json()["idempotent_replay"] is True
+            assert second.json()["trust_score"] == first_trust
+
+            # Same event_id with changed payload must fail conflict check.
+            conflict = await client.post(
+                "/signals/dgc",
+                headers=headers,
+                json={**payload, "mission_relevance": 0.2},
+            )
+            assert conflict.status_code == 409
+            assert "event_id_conflict_payload_mismatch" in conflict.text
+
+    asyncio.run(run())

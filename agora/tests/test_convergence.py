@@ -91,3 +91,53 @@ def test_dgc_ingest_and_landscape(fresh_app):
     assert landscape_resp.status_code == 200
     nodes = landscape_resp.json()["nodes"]
     assert any(node["agent_address"] == address for node in nodes)
+
+
+def test_dgc_replay_and_conflict_contract(fresh_app):
+    client = fresh_app
+
+    token_resp = client.post("/auth/token", json={"name": "agent-conv-2", "telos": "evaluation"})
+    assert token_resp.status_code == 200
+    token = token_resp.json()["token"]
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-SAB-DGC-Secret": "test-shared-secret",
+    }
+
+    invalid = client.post(
+        "/signals/dgc",
+        headers=headers,
+        json={
+            "event_id": "evt-invalid-score",
+            "timestamp": "2026-02-16T14:32:00Z",
+            "task_type": "evaluation",
+            "gate_scores": {"satya": -0.2},
+            "collapse_dimensions": {"ritual_ack": 0.1},
+        },
+    )
+    assert invalid.status_code == 422
+
+    payload = {
+        "event_id": "evt-replay-1",
+        "timestamp": "2026-02-16T14:33:00Z",
+        "task_id": "task-eval-2",
+        "task_type": "evaluation",
+        "artifact_id": "artifact-eval-2",
+        "gate_scores": {"satya": 0.91, "substance": 0.84},
+        "collapse_dimensions": {"ritual_ack": 0.2},
+        "mission_relevance": 0.9,
+    }
+    first = client.post("/signals/dgc", headers=headers, json=payload)
+    assert first.status_code == 200
+    assert first.json()["idempotent_replay"] is False
+
+    second = client.post("/signals/dgc", headers=headers, json=payload)
+    assert second.status_code == 200
+    assert second.json()["idempotent_replay"] is True
+
+    conflict = client.post(
+        "/signals/dgc",
+        headers=headers,
+        json={**payload, "mission_relevance": 0.3},
+    )
+    assert conflict.status_code == 409
