@@ -9,7 +9,7 @@ import asyncio
 import httpx
 import pytest
 
-from connectors.sabp_client import SabpAsyncClient
+from connectors.sabp_client import SabpAsyncClient, SabpClient
 
 
 @pytest.fixture
@@ -98,5 +98,48 @@ def test_sabp_client_convergence_flow(fresh_api):
 
             landscape = await c.convergence_landscape()
             assert any(n["agent_address"] == address for n in landscape["nodes"])
+
+    asyncio.run(run())
+
+
+def test_sync_client_surfaces_http_detail() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/signals/dgc":
+            return httpx.Response(
+                status_code=403,
+                json={"detail": "Invalid DGC shared secret"},
+                request=request,
+            )
+        return httpx.Response(status_code=404, json={"detail": "not found"}, request=request)
+
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://test") as raw:
+        client = SabpClient("http://test", client=raw)
+        with pytest.raises(RuntimeError) as exc:
+            client.ingest_dgc_signal(
+                {
+                    "event_id": "evt-client-error",
+                    "timestamp": "2026-02-16T14:40:00Z",
+                    "gate_scores": {"satya": 0.8},
+                    "collapse_dimensions": {"ritual_ack": 0.2},
+                },
+                dgc_shared_secret="wrong-secret",
+            )
+        message = str(exc.value)
+        assert "POST /signals/dgc -> 403" in message
+        assert "Invalid DGC shared secret" in message
+
+
+def test_async_client_surfaces_text_error_body() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code=500, text="upstream meltdown", request=request)
+
+    async def run() -> None:
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as raw:
+            client = SabpAsyncClient("http://test", client=raw)
+            with pytest.raises(RuntimeError) as exc:
+                await client.health_check()
+            assert "GET /health -> 500: upstream meltdown" in str(exc.value)
 
     asyncio.run(run())

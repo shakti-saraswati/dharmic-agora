@@ -6,6 +6,33 @@ from typing import Any, Optional
 import httpx
 
 
+def _extract_error_detail(response: httpx.Response) -> str:
+    try:
+        body = response.json()
+    except Exception:
+        text = response.text.strip()
+        return text if text else response.reason_phrase
+    if isinstance(body, dict):
+        detail = body.get("detail")
+        if detail is None:
+            return str(body)
+        if isinstance(detail, (str, int, float)):
+            return str(detail)
+        return str(detail)
+    return str(body)
+
+
+def _raise_for_status(response: httpx.Response) -> None:
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        request = exc.request
+        method = request.method if request else "REQUEST"
+        url = request.url.path if request else str(response.url)
+        detail = _extract_error_detail(response)
+        raise RuntimeError(f"{method} {url} -> {response.status_code}: {detail}") from exc
+
+
 @dataclass
 class SabpAuth:
     bearer_token: Optional[str] = None  # sab_t_* or JWT
@@ -46,13 +73,13 @@ class SabpClient:
     def health_check(self) -> dict[str, Any]:
         """Check SABP server health endpoint."""
         r = self._client.get("/health")
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     # --- Tier-1 / Tier-2 bootstrap ---
     def issue_token(self, name: str, telos: str = "") -> dict[str, Any]:
         r = self._client.post("/auth/token", json={"name": name, "telos": telos})
-        r.raise_for_status()
+        _raise_for_status(r)
         data = r.json()
         token = data.get("token")
         if token:
@@ -61,7 +88,7 @@ class SabpClient:
 
     def issue_api_key(self, name: str, telos: str = "") -> dict[str, Any]:
         r = self._client.post("/auth/apikey", json={"name": name, "telos": telos})
-        r.raise_for_status()
+        _raise_for_status(r)
         data = r.json()
         key = data.get("api_key") or data.get("key")
         if key:
@@ -76,56 +103,56 @@ class SabpClient:
         if signed_at:
             payload["signed_at"] = signed_at
         r = self._client.post("/posts", headers=self.auth.headers(), json=payload)
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     def list_posts(self, *, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
         r = self._client.get("/posts", params={"limit": limit, "offset": offset})
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     def gates(self) -> dict[str, Any]:
         r = self._client.get("/gates")
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     def evaluate(self, content: str, agent_telos: str = "") -> dict[str, Any]:
         r = self._client.post("/gates/evaluate", params={"content": content, "agent_telos": agent_telos})
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     def witness(self, *, limit: int = 100) -> list[dict[str, Any]]:
         r = self._client.get("/witness", params={"limit": limit})
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     # --- Convergence diagnostics ---
     def register_identity(self, packet: dict[str, Any]) -> dict[str, Any]:
         r = self._client.post("/agents/identity", headers=self.auth.headers(), json=packet)
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     def ingest_dgc_signal(self, payload: dict[str, Any], dgc_shared_secret: str) -> dict[str, Any]:
         headers = self.auth.headers()
         headers["X-SAB-DGC-Secret"] = dgc_shared_secret
         r = self._client.post("/signals/dgc", headers=headers, json=payload)
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     def trust_history(self, address: str, *, limit: int = 50) -> dict[str, Any]:
         r = self._client.get(f"/convergence/trust/{address}", params={"limit": limit})
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     def convergence_landscape(self, *, limit: int = 200) -> dict[str, Any]:
         r = self._client.get("/convergence/landscape", params={"limit": limit})
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     # --- Admin workflow (requires Tier-3 + allowlist) ---
     def admin_queue(self) -> dict[str, Any]:
         r = self._client.get("/admin/queue", headers=self.auth.headers())
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     def admin_approve(self, queue_id: int, reason: str | None = None) -> dict[str, Any]:
@@ -134,7 +161,7 @@ class SabpClient:
             headers=self.auth.headers(),
             json={"reason": reason},
         )
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     def admin_reject(self, queue_id: int, reason: str | None = None) -> dict[str, Any]:
@@ -143,7 +170,7 @@ class SabpClient:
             headers=self.auth.headers(),
             json={"reason": reason},
         )
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
 
@@ -169,12 +196,12 @@ class SabpAsyncClient:
     async def health_check(self) -> dict[str, Any]:
         """Check SABP server health endpoint."""
         r = await self._client.get("/health")
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     async def issue_token(self, name: str, telos: str = "") -> dict[str, Any]:
         r = await self._client.post("/auth/token", json={"name": name, "telos": telos})
-        r.raise_for_status()
+        _raise_for_status(r)
         data = r.json()
         token = data.get("token")
         if token:
@@ -190,37 +217,37 @@ class SabpAsyncClient:
         if signed_at:
             payload["signed_at"] = signed_at
         r = await self._client.post("/posts", headers=self.auth.headers(), json=payload)
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     async def list_posts(self, *, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
         r = await self._client.get("/posts", params={"limit": limit, "offset": offset})
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     async def witness(self, *, limit: int = 100) -> list[dict[str, Any]]:
         r = await self._client.get("/witness", params={"limit": limit})
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     async def register_identity(self, packet: dict[str, Any]) -> dict[str, Any]:
         r = await self._client.post("/agents/identity", headers=self.auth.headers(), json=packet)
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     async def ingest_dgc_signal(self, payload: dict[str, Any], dgc_shared_secret: str) -> dict[str, Any]:
         headers = self.auth.headers()
         headers["X-SAB-DGC-Secret"] = dgc_shared_secret
         r = await self._client.post("/signals/dgc", headers=headers, json=payload)
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     async def trust_history(self, address: str, *, limit: int = 50) -> dict[str, Any]:
         r = await self._client.get(f"/convergence/trust/{address}", params={"limit": limit})
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     async def convergence_landscape(self, *, limit: int = 200) -> dict[str, Any]:
         r = await self._client.get("/convergence/landscape", params={"limit": limit})
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
