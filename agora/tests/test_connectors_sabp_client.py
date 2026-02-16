@@ -91,6 +91,7 @@ def test_sabp_client_convergence_flow(fresh_api):
                 dgc_shared_secret="test-shared-secret",
             )
             assert signal["event_id"] == "evt-client-1"
+            assert signal["schema_version"] == "dgc.v1"
 
             trust = await c.trust_history(address)
             assert trust["latest"]["signal_event_id"] == "evt-client-1"

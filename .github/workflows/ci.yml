@@ -51,6 +51,11 @@ jobs:
         pytest tests/ -v
         pytest agora/tests/ -v --cov=agora --cov-report=xml
 
+    - name: Run smoke test
+      if: matrix.python-version == '3.11'
+      run: |
+        bash scripts/smoke_test.sh
+
     - name: Upload coverage
       uses: codecov/codecov-action@v3
       with:

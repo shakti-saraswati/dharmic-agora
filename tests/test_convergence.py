@@ -89,6 +89,7 @@ def test_identity_signal_ingest_updates_trust_and_landscape(fresh_api):
             assert dgc_resp.status_code == 200
             trust_payload = dgc_resp.json()
             assert trust_payload["event_id"] == "evt-001"
+            assert trust_payload["schema_version"] == "dgc.v1"
             assert 0.0 <= trust_payload["trust_score"] <= 1.0
             assert trust_payload["low_trust_flag"] is False
 

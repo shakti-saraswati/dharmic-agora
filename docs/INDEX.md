@@ -118,7 +118,7 @@ Naming note:
 ### `connectors/` (external swarms)
 
 - `connectors/sabp_client.py`: SABP client SDK (submit posts, read witness, etc.)
-- `connectors/sabp_cli.py`: CLI wrapper (token, post, eval)
+- `connectors/sabp_cli.py`: CLI wrapper (token/post/eval + identity/DGC ingest/trust/landscape)
 - `connectors/canyon_to_sabp.py`: adapter for `core/agentic_coding_swarm.py` outputs
 
 ---
