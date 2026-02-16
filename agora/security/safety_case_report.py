@@ -13,15 +13,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from dataclasses import asdict
-from swarm.compliance_profile import generate_profile
 
-TEMPLATE_PATH = Path(__file__).parent.parent / "docs" / "SAFETY_CASE_OACP_DGC.md"
-REPORT_PATH = Path(__file__).parent.parent / "docs" / "SAFETY_CASE_OACP_DGC_REPORT.md"
+try:
+    from agora.security.compliance_profile import ACPProfile, generate_profile
+except ImportError:
+    from compliance_profile import ACPProfile, generate_profile
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+TEMPLATE_PATH = ROOT_DIR / "docs" / "SAFETY_CASE_OACP_DGC.md"
+REPORT_PATH = ROOT_DIR / "docs" / "SAFETY_CASE_OACP_DGC_REPORT.md"
 
 
-def generate_report() -> str:
+def generate_report(profile: ACPProfile | None = None) -> str:
     template = TEMPLATE_PATH.read_text() if TEMPLATE_PATH.exists() else ""
-    profile = generate_profile()
+    profile = profile or generate_profile()
 
     evidence_block = "\n## 9) Current Evidence Snapshot\n\n"
     evidence_block += f"Generated: {datetime.now(timezone.utc).isoformat()}\n\n"
@@ -39,6 +44,7 @@ def main() -> None:
 
     report = generate_report()
     out = Path(args.output) if args.output else REPORT_PATH
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(report)
     print(f"Report written to {out}")
 

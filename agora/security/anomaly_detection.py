@@ -16,7 +16,10 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from swarm import systemic_monitor
+try:
+    from agora.security import systemic_monitor
+except ImportError:
+    import systemic_monitor
 
 POLICY_PATH = Path(__file__).parent / "policy" / "anomaly_detection.yaml"
 ALERTS_LOG = Path(__file__).parent.parent / "logs" / "alerts.jsonl"
