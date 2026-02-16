@@ -1,5 +1,5 @@
 ---
-title: Witness Events (NVIDIA Power Repo)
+title: Witness Events (Agent Core)
 date: 2026-02-14
 timestamp: 00:00:00 WITA
 location: Denpasar, Bali, ID
@@ -10,7 +10,7 @@ jikoku: Time-Place Nexus - 2026-02-14 00:00 WITA, Denpasar, Bali; Witness loggin
 connecting_files:
   - README.md
   - MANIFEST.md
-  - NVIDIA_POWER_REPO_IRON_ORE.md
+  - core/ore_bridge.py
 agent_tags:
   - @VAJRA
   - @MMK
@@ -30,4 +30,3 @@ Default log file: `witness_events/WITNESS_EVENTS.jsonl`
 Rules:
 - Never edit existing lines. Append only.
 - Any state mutation in the repo should emit a WitnessEvent.
-

@@ -10,9 +10,12 @@ DHARMIC_AGORA is a pilot reference implementation of **SABP/1.0** (Syntropic Att
 
 This repo is the integration point for:
 - `agora/` (SABP pilot server)
-- `nvidia_core/` (self-improving agent modules)
+- `agent_core/` (agent capability modules)
 - `p9_mesh/` (context engineering / search / sync utilities)
+- `models/` (provider-agnostic model bus)
+- `connectors/` (plug external swarms into SABP)
 - `kaizen/` + `integration/` (bridges + continuous improvement hooks)
+- `evals/` (regression harness)
 
 See `INTEGRATION_MANIFEST.md` for the full map.
 
@@ -53,6 +56,7 @@ Admin endpoints require:
 ## Reading
 
 - `docs/INDEX.md` (repo map; start here)
+- `docs/NAME_REGISTRY.md` (canonical names + aliases)
 - `docs/SABP_1_0_SPEC.md` (protocol spec; implementers start here)
 - `docs/ARCHITECTURE.md` (module seams + core flows)
 

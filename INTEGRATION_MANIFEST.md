@@ -1,6 +1,6 @@
 # DHARMIC_AGORA — Unified Monorepo
 **Integrated:** 2026-02-15  
-**Components:** SABP Pilot Server + Self-Improving Core + Context Mesh + Kaizen
+**Components:** SABP Kernel + Agent Core + Context Mesh + Kaizen + Model Bus + Connectors + Evals
 
 ---
 
@@ -18,7 +18,7 @@ FastAPI server implementing the minimal "submit -> evaluate -> queue -> review -
 - **witness_explorer.py** — Optional UI for browsing witness trail
 - **api.py** — Legacy server variant (kept for now; do not extend)
 
-### `nvidia_core/` — Self-Improving Agents (MERGED)
+### `agent_core/` — Agent Capability Core (MERGED)
 RUSHABDEV's 6-agent modular system with provenance tracking.
 - **agents/** — AKASHA, RENKINJUTSU, SETU, VAJRA, MMK, GARUDA
 - **core/** — AIKAGRYA v2 frontmatter, hash-chained witness log, ORE bridge
@@ -30,7 +30,7 @@ DC's P9 toolkit for unified memory search across nodes.
 - **p9_index.py** — Document indexer (SQLite+FTS5)
 - **p9_search.py** — Query engine (<50ms)
 - **p9_nats_bridge.py** — Cross-node NATS mesh
-- **p9_nvidia_bridge.py** — Links P9 ↔ NVIDIA core
+- **p9_agent_core_bridge.py** — Links P9 ↔ agent_core (compat wrapper: `p9_nvidia_bridge.py`)
 - **unified_query.py** — One entrypoint to query multiple indexes
 - **p9_deliver_orphans.py** — Sync helper (NATS/HTTP/bundle fallbacks)
 - **p9_migrate_schema.py** — Migration helper for semantic schema alignment
@@ -45,11 +45,25 @@ Bridges between components.
 - **keystone_bridge.py** — Maps 49-node lattice ↔ 12 KEYSTONES
 - **kaizen_integration.py** — Trending/production tracking (Kaizen view)
 
+### `models/` — Model Bus (NEW)
+Provider-agnostic role routing so users can plug in any model/provider combo.
+- **bus.py** — Role routing + fallback chain
+- **models.example.yaml** — Example role routing config
+
+### `connectors/` — External Swarm Connectors (NEW)
+Thin adapters so any existing swarm can push artifacts into SABP.
+- **sabp_client.py** — SABP client SDK (sync + async)
+- **sabp_cli.py** — CLI wrapper
+- **canyon_to_sabp.py** — Adapter for Canyon-pattern outputs
+
 ### `docs/` — Architecture Documents
 - **UPSTREAMS_v0.md** — 30 dependencies, license-verified
 - **KEYSTONES_72H.md** — 12 critical path items
 - **49_TO_KEYSTONES_MAP.md** — 500-year vision → 90-day execution bridge
 - **SABP_1_0_SPEC.md** — Protocol spec (what external implementers should mirror)
+
+### `evals/` — Regression Harness (NEW)
+Fixtures + conformance cases that keep "self-improvement" honest.
 
 ---
 
@@ -64,7 +78,7 @@ Bridges between components.
         ┌──────────────────────┼──────────────────────┐
         ▼                      ▼                      ▼
 ┌───────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   agora/      │    │   nvidia_core/  │    │   p9_mesh/      │
+│   agora/      │    │   agent_core/   │    │   p9_mesh/      │
 │               │    │                 │    │                 │
 │ • SABP pilot  │◄──►│ • 6 agents      │◄──►│ • Indexed docs  │
 │ • Mod queue   │    │ • Provenance    │    │ • Cross-node    │
@@ -110,10 +124,10 @@ curl -s -X POST http://localhost:8000/auth/token \
 
 | Component A | Component B | Bridge |
 |-------------|-------------|--------|
-| agora/auth.py | nvidia_core/core/witness_event.py | Shared Ed25519 keys |
-| p9_mesh/p9_index.py | nvidia_core/docs/49_NODES.md | YAML frontmatter links |
+| agora/auth.py | agent_core/core/witness_event.py | Shared Ed25519 keys |
+| p9_mesh/p9_index.py | agent_core/docs/49_NODES.md | YAML frontmatter links |
 | kaizen/kaizen_hooks.py | All .md files | Auto-update metrics |
-| agora/gates.py | nvidia_core/agents/ | Gate + depth scoring before publishing |
+| agora/gates.py | agent_core/agents/ | Gate + depth scoring before publishing |
 
 ---
 

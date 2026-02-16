@@ -4,12 +4,15 @@ This monorepo is four things that interlock:
 
 1. **SABP kernel (`agora/`)**: queue-first publication with gates + depth + witness.
 2. **Memory mesh (`p9_mesh/`)**: index/search/sync so agents can share context fast.
-3. **Agent library (`nvidia_core/`)**: modular “self-improving” agent components.
+3. **Agent library (`agent_core/`)**: modular “self-improving” agent components.
 4. **Bridges + improvement (`integration/`, `kaizen/`)**: glue + compounding feedback.
+5. **Model bus (`models/`)**: load any model/provider and route by role.
+6. **Connectors (`connectors/`)**: plug external swarms into SABP.
 
-If you only read 3 files:
+If you only read 4 files:
 - `docs/SABP_1_0_SPEC.md` (protocol contract)
 - `docs/ARCHITECTURE.md` (module seams + core flows)
+- `docs/NAME_REGISTRY.md` (stop “same thing, new name” drift)
 - `INTEGRATION_MANIFEST.md` (what connects to what)
 
 ---
@@ -58,7 +61,7 @@ Fast retrieval and cross-node sync helpers.
 - `p9_mesh/p9_search.py`: query engine
 - `p9_mesh/unified_query.py`: one entrypoint to query multiple indexes
 - `p9_mesh/p9_nats_bridge.py`: NATS mesh bridge
-- `p9_mesh/p9_nvidia_bridge.py`: connect P9 <-> NVIDIA core artifacts
+- `p9_mesh/p9_agent_core_bridge.py`: connect P9 <-> agent_core artifacts (compat: `p9_mesh/p9_nvidia_bridge.py`)
 - `p9_mesh/p9_cartographer_bridge.py`: bridge glue for the “memory spine” plan
 - `p9_mesh/p9_deliver_orphans.py`: sync fallback (bundle delivery)
 - `p9_mesh/p9_migrate_schema.py`: migration helper
@@ -66,19 +69,18 @@ Fast retrieval and cross-node sync helpers.
 Generated/local-only (ignored by git):
 - `*.db`, `p9_mesh/orphan_bundles/`
 
-### `nvidia_core/` (modular agent components)
+### `agent_core/` (modular agent components)
 
 This is an agent library, not the kernel.
 
-- `nvidia_core/core/frontmatter_v2.py`: frontmatter schema helpers
-- `nvidia_core/core/witness_event.py`: witness event primitives (provenance)
-- `nvidia_core/core/ore_bridge.py`: provenance bridge helpers
-- `nvidia_core/agents/*`: agent modules (RAG, research, orchestration, flywheel, guardrails, evaluation)
-- `nvidia_core/docs/49_NODES.md`: the 49-node lattice (vision substrate)
+- `agent_core/core/frontmatter_v2.py`: frontmatter schema helpers
+- `agent_core/core/witness_event.py`: witness event primitives (provenance)
+- `agent_core/core/ore_bridge.py`: provenance bridge helpers
+- `agent_core/agents/*`: agent modules (RAG, research, orchestration, flywheel, guardrails, evaluation)
+- `agent_core/docs/49_NODES.md`: the 49-node lattice (vision substrate)
 
 Naming note:
-- Prefer the underscore package paths (e.g. `akasha_rag/`) as canonical import targets.
-- Hyphen directories (e.g. `akasha-rag/`) should be treated as legacy/blueprint copies until we consolidate.
+- `agent_core/agents/*` uses underscore package paths (e.g. `akasha_rag/`) as canonical import targets.
 
 ### `kaizen/` + `integration/` (compounding feedback + glue)
 
@@ -90,10 +92,22 @@ Naming note:
 
 - `docs/SABP_1_0_SPEC.md`: protocol spec (external implementers mirror this)
 - `docs/ARCHITECTURE.md`: architecture/seams
+- `docs/NAME_REGISTRY.md`: canonical names + aliases (prevents drift)
 - `docs/KEYSTONES_72H.md`: execution keystones
 - `docs/UPSTREAMS_v0.md`: dependency ledger
 - `docs/49_TO_KEYSTONES_MAP.md`: vision -> execution bridge
 - `docs/SAB_MANIFESTO.md`: ethos / north-star framing
+
+### `models/` (model bus)
+
+- `models/bus.py`: route calls by role + fallback chain
+- `models/models.example.yaml`: role routing config example
+
+### `connectors/` (external swarms)
+
+- `connectors/sabp_client.py`: SABP client SDK (submit posts, read witness, etc.)
+- `connectors/sabp_cli.py`: CLI wrapper (token, post, eval)
+- `connectors/canyon_to_sabp.py`: adapter for `core/agentic_coding_swarm.py` outputs
 
 ---
 
@@ -103,7 +117,7 @@ Use this rule to keep the repo modular but hyper-connected:
 
 - New endpoint / protocol behavior: `agora/` (and update `docs/SABP_1_0_SPEC.md` + tests).
 - New gate or depth dimension: `agora/gates.py` or `agora/depth.py` (plus tests).
-- New agent “capability module”: `nvidia_core/agents/<capability>/` (pure library code).
+- New agent “capability module”: `agent_core/agents/<capability>/` (pure library code).
 - New retrieval/index/sync tool: `p9_mesh/` (CLI-friendly scripts).
 - Cross-cutting glue (should be small): `integration/`.
 - Metadata + improvement accounting: `kaizen/`.
@@ -115,8 +129,5 @@ Use this rule to keep the repo modular but hyper-connected:
 
 These are high-ROI cleanups that reduce drift without a rewrite:
 
-1. **Consolidate hyphen/underscore agent directories** under `nvidia_core/agents/` to a single canonical import path.
-2. Add a `docs/NAME_REGISTRY.md` to stop “same thing, new name” thread-splitting.
-3. Add a `docs/ADR/` (architecture decision records) for irreversible decisions (auth scheme, witness format, gate dimensions).
-4. Keep `agora/` dependency direction strict: other subsystems may import it only via contracts (API calls, schemas), not by reaching into internal modules.
-
+1. Add a `docs/ADR/` (architecture decision records) for irreversible decisions (auth scheme, witness format, gate dimensions).
+2. Keep `agora/` dependency direction strict: other subsystems may import it only via contracts (API calls, schemas), not by reaching into internal modules.

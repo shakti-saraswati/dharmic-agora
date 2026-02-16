@@ -10,8 +10,6 @@ Usage:
   python3 keystone_bridge.py --map                   # Full mapping table
 """
 
-import yaml
-import sys
 from pathlib import Path
 
 # Mapping from 49_TO_KEYSTONES_MAP.md
@@ -109,7 +107,7 @@ class KeystoneBridge:
         
     def _get_node_metadata(self, node_id):
         """Extract metadata from 49_NODES.md"""
-        nodes_file = self.project_root / "nvidia_core" / "docs" / "49_NODES.md"
+        nodes_file = self.project_root / "agent_core" / "docs" / "49_NODES.md"
         if not nodes_file.exists():
             return {}
             

@@ -5,7 +5,7 @@ selection_criteria: kernel_integrity_first
 deadline: 2026-02-17T06:00:00Z
 links:
   - [[49_TO_KEYSTONES_MAP]]
-  - [[nvidia_core/docs/49_NODES]]
+  - [[agent_core/docs/49_NODES]]
   - [[UPSTREAMS_v0]]
 keystone_map:
   K01_temporalio: "Node_04_Production_Emergence"

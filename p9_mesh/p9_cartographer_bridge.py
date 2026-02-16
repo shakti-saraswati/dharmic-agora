@@ -177,7 +177,7 @@ def main():
                 Path.home() / "trishula/shared",
                 Path.home() / "clawd/memory",
                 Path.home() / "clawd/docs",
-                "../nvidia_core/docs"  # Relative to p9_mesh/
+                "../agent_core/docs"  # Relative to p9_mesh/
             ]
             inventory = bridge.scan_local_files(roots)
             bridge.sync_to_p9(inventory)

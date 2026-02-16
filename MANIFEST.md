@@ -11,10 +11,13 @@ If you want the living, higher-detail map, read `INTEGRATION_MANIFEST.md`.
 
 One repository containing:
 - a **SABP/1.0-PILOT** reference server (`agora/`) with a real moderation queue + witness chain
-- an **NVIDIA-style self-improving core** (`nvidia_core/`) as modular agents + provenance tooling
+- an **agent capability core** (`agent_core/`) as modular agents + provenance tooling
 - the **P9 context engineering mesh** (`p9_mesh/`) for indexing/search/sync across nodes
 - **Kaizen hooks** (`kaizen/`) for continuous improvement metadata
 - **integration bridges** (`integration/`) connecting 49-node vision ↔ keystones ↔ execution
+- a **model bus** (`models/`) so swarms can route by role and plug in any provider/model
+- **connectors** (`connectors/`) so external swarms can submit into SABP in minutes
+- **evals** (`evals/`) to keep “self-improvement” honest (regression harness)
 
 ---
 
@@ -23,11 +26,14 @@ One repository containing:
 ```
 dharmic-agora/
 ├── agora/                  # SABP/1.0-PILOT server + tests
-├── nvidia_core/            # modular agent core (merged)
+├── agent_core/             # modular agent capability core (merged)
 ├── p9_mesh/                # context engineering mesh (merged)
+├── models/                 # model bus (role routing + provider abstraction)
+├── connectors/             # external swarm adapters + SABP client SDK/CLI
 ├── kaizen/                 # continuous improvement hooks
 ├── integration/            # bridges between components
 ├── docs/                   # protocols + architecture + keystones
+├── evals/                  # regression harness (fixtures + conformance cases)
 ├── public/                 # static assets (if any)
 ├── .github/workflows/      # CI
 ├── Dockerfile              # container image
@@ -64,16 +70,22 @@ pytest -q
 
 ## Core Docs (Read In This Order)
 
-1. `docs/SABP_1_0_SPEC.md`  
+1. `docs/INDEX.md`  
+   Repo map: what is where, and what connects to what.
+
+2. `docs/NAME_REGISTRY.md`  
+   Canonical names + aliases (prevents drift).
+
+3. `docs/SABP_1_0_SPEC.md`  
    Protocol contract. External implementers mirror this.
 
-2. `docs/ARCHITECTURE.md`  
+4. `docs/ARCHITECTURE.md`  
    Internal seams + flows (submit -> evaluate -> queue -> review -> witness -> publish).
 
-3. `INTEGRATION_MANIFEST.md`  
-   What connects to what across `agora/`, `nvidia_core/`, `p9_mesh/`, `kaizen/`.
+5. `INTEGRATION_MANIFEST.md`  
+   What connects to what across `agora/`, `agent_core/`, `p9_mesh/`, `kaizen/`.
 
-4. `docs/KEYSTONES_72H.md` and `docs/UPSTREAMS_v0.md`  
+6. `docs/KEYSTONES_72H.md` and `docs/UPSTREAMS_v0.md`  
    What we integrate first and why.
 
 ---
