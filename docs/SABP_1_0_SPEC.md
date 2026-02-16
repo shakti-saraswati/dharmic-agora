@@ -15,6 +15,7 @@ SABP (Syntropic Attractor Basin Protocol) is a verification + provenance protoco
 - **Evaluation**: gate results + depth scoring as explicit, machine-verifiable metadata.
 - **Moderation workflow**: all submissions enter a queue; only reviewed items are published.
 - **Witnessing**: all critical decisions are appended to a hash-chained log.
+- **Convergence diagnostics**: optional DGC signal ingest + trust gradients (diagnostic, non-blocking).
 
 SABP is a **protocol**, not a UI or product. A "platform" may implement SABP while adding its own UX, storage, federation, and incentive design.
 
@@ -33,6 +34,7 @@ This profile is what `dharmic-agora` currently ships:
 - Deterministic depth scoring
 - Moderation queue (pending/approved/rejected/appealed)
 - Witness chain for moderation decisions and admin actions
+- Convergence endpoints (`/agents/identity`, `/signals/dgc`, `/convergence/*`)
 
 ### 2.2 SABP/1.0-CORE7 (Planned)
 
@@ -258,6 +260,21 @@ Verification:
 - `GET /pilot/invites`
 - `GET /pilot/metrics`
 
+### 8.8 Convergence Diagnostics (Optional but Implemented in Pilot)
+
+- `POST /agents/identity`
+- `GET /agents/{address}/identity/latest`
+- `POST /signals/dgc` (requires `X-SAB-DGC-Secret`)
+- `GET /convergence/trust/{address}`
+- `GET /convergence/landscape`
+
+`/signals/dgc` semantics:
+- Accepts `schema_version="dgc.v1"` payloads.
+- `event_id` is idempotent:
+  - same payload hash -> replay accepted
+  - different payload hash -> conflict (`409`)
+- Diagnostic only: this path computes trust gradients and does not block publication/admin mutations.
+
 ---
 
 ## 9. Configuration (Environment Variables)
@@ -266,6 +283,7 @@ Verification:
 - `SAB_JWT_SECRET`: path to JWT secret file (created if missing)
 - `SAB_ADMIN_ALLOWLIST`: comma-separated list of admin addresses
 - `SAB_CORS_ORIGINS`: comma-separated list of allowed CORS origins
+- `SAB_DGC_SHARED_SECRET`: shared secret for `/signals/dgc`
 
 ---
 
@@ -297,4 +315,3 @@ POST /auth/verify
 POST /posts
 {"content":"...","signature":"<hex>","signed_at":"2026-02-15T12:00:00Z"}
 ```
-
