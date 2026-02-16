@@ -221,3 +221,56 @@ def test_dgc_contract_validation_and_event_id_conflict(fresh_api):
             assert "event_id_conflict_payload_mismatch" in conflict.text
 
     asyncio.run(run())
+
+
+def test_dgc_81_dimension_payload_and_cross_agent_conflict(fresh_api):
+    async def run() -> None:
+        transport = httpx.ASGITransport(app=fresh_api.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            # Agent A
+            token_a = await client.post("/auth/token", json={"name": "agent-a", "telos": "evaluation"})
+            assert token_a.status_code == 200
+            headers_a = {
+                "Authorization": f"Bearer {token_a.json()['token']}",
+                "X-SAB-DGC-Secret": "test-shared-secret",
+            }
+
+            # Agent B
+            token_b = await client.post("/auth/token", json={"name": "agent-b", "telos": "evaluation"})
+            assert token_b.status_code == 200
+            headers_b = {
+                "Authorization": f"Bearer {token_b.json()['token']}",
+                "X-SAB-DGC-Secret": "test-shared-secret",
+            }
+
+            collapse_81 = {f"dim_{i:02d}": (0.9 if i % 4 == 0 else 0.2) for i in range(1, 82)}
+            payload = {
+                "event_id": "evt-81dims-1",
+                "schema_version": "dgc.v1",
+                "timestamp": "2026-02-16T16:20:00Z",
+                "task_id": "task-81",
+                "task_type": "evaluation",
+                "artifact_id": "artifact-81",
+                "gate_scores": {"satya": 0.88, "substance": 0.84, "coherence": 0.8},
+                "collapse_dimensions": collapse_81,
+                "mission_relevance": 0.86,
+            }
+
+            ok = await client.post("/signals/dgc", headers=headers_a, json=payload)
+            assert ok.status_code == 200
+            body = ok.json()
+            assert body["event_id"] == "evt-81dims-1"
+            assert isinstance(body["trust_score"], float)
+
+            history = await client.get(f"/convergence/trust/{token_a.json()['address']}", headers=headers_a)
+            assert history.status_code == 200
+            latest = history.json()["latest"]
+            assert "liturgical_collapse_risk" in latest["likely_causes"]
+            assert len(latest["high_collapse"]) >= 10
+
+            # Cross-agent replay of same event_id must fail.
+            conflict = await client.post("/signals/dgc", headers=headers_b, json=payload)
+            assert conflict.status_code == 409
+            assert "event_id_conflict_agent_mismatch" in conflict.text
+
+    asyncio.run(run())

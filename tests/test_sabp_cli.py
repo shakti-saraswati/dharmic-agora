@@ -80,6 +80,71 @@ def test_cli_ingest_dgc_batch_success(tmp_path: Path, monkeypatch: pytest.Monkey
     assert '"failed": 0' in out
 
 
+def test_cli_default_output_is_json(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    class DummyClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def issue_token(self, name, telos=""):
+            return {"token": "sab_t_abc", "address": "agent_1", "name": name, "telos": telos}
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(sabp_cli, "SabpClient", DummyClient)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "sabp_cli.py",
+            "--url",
+            "http://example",
+            "token",
+            "--name",
+            "agent-x",
+            "--telos",
+            "eval",
+        ],
+    )
+
+    sabp_cli.main()
+    out = capsys.readouterr().out.strip()
+    parsed = json.loads(out)
+    assert parsed["token"] == "sab_t_abc"
+    assert parsed["name"] == "agent-x"
+
+
+def test_cli_text_output_mode(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    class DummyClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def issue_token(self, name, telos=""):
+            return {"token": "sab_t_textmode", "address": "agent_1"}
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(sabp_cli, "SabpClient", DummyClient)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "sabp_cli.py",
+            "--url",
+            "http://example",
+            "--format",
+            "text",
+            "token",
+            "--name",
+            "agent-x",
+        ],
+    )
+    sabp_cli.main()
+    out = capsys.readouterr().out.strip()
+    assert out == "sab_t_textmode"
+
+
 def test_cli_ingest_dgc_batch_requires_secret(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

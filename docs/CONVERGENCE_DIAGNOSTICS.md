@@ -28,6 +28,7 @@ Use `python -m connectors.sabp_cli`:
 - Ingest batch (JSON array or JSONL): `ingest-dgc-batch --payloads signals.jsonl --dgc-secret $SAB_DGC_SHARED_SECRET`
 - Query trust: `trust --address <agent_address>`
 - Query landscape: `landscape`
+- Output mode: `--format json` (default) or `--format text`
 
 ## Identity Packet Schema
 

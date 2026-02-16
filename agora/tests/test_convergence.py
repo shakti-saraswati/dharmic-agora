@@ -141,3 +141,28 @@ def test_dgc_replay_and_conflict_contract(fresh_app):
         json={**payload, "mission_relevance": 0.3},
     )
     assert conflict.status_code == 409
+
+
+def test_dgc_schema_version_guard(fresh_app):
+    client = fresh_app
+    token_resp = client.post("/auth/token", json={"name": "agent-conv-3", "telos": "evaluation"})
+    assert token_resp.status_code == 200
+    token = token_resp.json()["token"]
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-SAB-DGC-Secret": "test-shared-secret",
+    }
+
+    bad = client.post(
+        "/signals/dgc",
+        headers=headers,
+        json={
+            "event_id": "evt-bad-schema",
+            "schema_version": "dgc.v0",
+            "timestamp": "2026-02-16T14:34:00Z",
+            "task_type": "evaluation",
+            "gate_scores": {"satya": 0.9},
+            "collapse_dimensions": {"ritual_ack": 0.2},
+        },
+    )
+    assert bad.status_code == 422
