@@ -548,6 +548,30 @@ class ConvergenceStore:
             "idempotent_replay": bool(signal.get("_idempotent_replay", False)),
         }
 
+    def attach_audit_hash(self, event_id: str, audit_hash: str) -> None:
+        """Attach audit hash to persisted signal/gradient rows if not already set."""
+        with self._conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE dgc_signals
+                SET audit_hash = COALESCE(audit_hash, ?)
+                WHERE event_id = ?
+                """,
+                (audit_hash, event_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError("signal_not_found")
+
+            cursor.execute(
+                """
+                UPDATE trust_gradients
+                SET audit_hash = COALESCE(audit_hash, ?)
+                WHERE signal_event_id = ?
+                """,
+                (audit_hash, event_id),
+            )
+
     def trust_history(self, agent_address: str, limit: int = 50) -> List[Dict[str, Any]]:
         with self._conn() as conn:
             cursor = conn.cursor()

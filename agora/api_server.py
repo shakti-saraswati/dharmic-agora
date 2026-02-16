@@ -1021,8 +1021,35 @@ async def ingest_dgc_signal(
     payload_hash = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+    try:
+        outcome = _convergence.ingest_and_score(
+            agent_address=agent["address"],
+            payload=payload,
+            payload_hash=payload_hash,
+            audit_hash=None,
+        )
+    except ValueError as exc:
+        reason = str(exc)
+        record_audit(
+            "dgc_signal_rejected",
+            agent["address"],
+            "dgc_signal",
+            None,
+            {
+                "event_id": req.event_id,
+                "task_id": req.task_id,
+                "artifact_id": req.artifact_id,
+                "payload_hash": payload_hash,
+                "reason": reason,
+            },
+        )
+        if str(exc).startswith("event_id_conflict"):
+            raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    was_replay = bool(outcome.get("idempotent_replay", False))
     audit = record_audit(
-        "dgc_signal_ingested",
+        "dgc_signal_replayed" if was_replay else "dgc_signal_ingested",
         agent["address"],
         "dgc_signal",
         None,
@@ -1031,26 +1058,18 @@ async def ingest_dgc_signal(
             "task_id": req.task_id,
             "artifact_id": req.artifact_id,
             "payload_hash": payload_hash,
+            "idempotent_replay": was_replay,
         },
     )
-    try:
-        outcome = _convergence.ingest_and_score(
-            agent_address=agent["address"],
-            payload=payload,
-            payload_hash=payload_hash,
-            audit_hash=audit["data_hash"],
-        )
-    except ValueError as exc:
-        if str(exc).startswith("event_id_conflict"):
-            raise HTTPException(status_code=409, detail=str(exc))
-        raise HTTPException(status_code=400, detail=str(exc))
+    _convergence.attach_audit_hash(req.event_id, audit["data_hash"])
+
     gradient = outcome["gradient"] or {}
     return DGCSignalResponse(
         event_id=req.event_id,
         schema_version=req.schema_version,
         trust_score=float(gradient.get("trust_score", 0.0)),
         low_trust_flag=bool(gradient.get("low_trust_flag", False)),
-        idempotent_replay=bool(outcome.get("idempotent_replay", False)),
+        idempotent_replay=was_replay,
         likely_causes=list(gradient.get("likely_causes", [])),
         weak_gates=list(gradient.get("weak_gates", [])),
     )

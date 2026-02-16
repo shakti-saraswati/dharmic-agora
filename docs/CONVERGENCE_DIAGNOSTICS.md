@@ -92,3 +92,7 @@ Contract notes:
 
 - Identity and DGC ingest events are recorded in audit chain.
 - Trust gradient rows store audit hash links and payload hashes.
+- DGC audit actions:
+  - `dgc_signal_ingested` (first successful ingest)
+  - `dgc_signal_replayed` (idempotent replay with matching payload hash)
+  - `dgc_signal_rejected` (contract/conflict rejection)

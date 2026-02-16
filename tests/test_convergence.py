@@ -274,3 +274,55 @@ def test_dgc_81_dimension_payload_and_cross_agent_conflict(fresh_api):
             assert "event_id_conflict_agent_mismatch" in conflict.text
 
     asyncio.run(run())
+
+
+def test_dgc_audit_actions_match_success_replay_reject_paths(fresh_api):
+    async def run() -> None:
+        transport = httpx.ASGITransport(app=fresh_api.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            token_resp = await client.post("/auth/token", json={"name": "diag-audit", "telos": "evaluation"})
+            assert token_resp.status_code == 200
+            headers = {
+                "Authorization": f"Bearer {token_resp.json()['token']}",
+                "X-SAB-DGC-Secret": "test-shared-secret",
+            }
+            base_payload = {
+                "event_id": "evt-audit-paths-1",
+                "schema_version": "dgc.v1",
+                "timestamp": "2026-02-16T16:30:00Z",
+                "task_id": "task-audit-1",
+                "task_type": "evaluation",
+                "artifact_id": "artifact-audit-1",
+                "gate_scores": {"satya": 0.8, "substance": 0.79},
+                "collapse_dimensions": {"ritual_ack": 0.2},
+                "mission_relevance": 0.8,
+            }
+
+            first = await client.post("/signals/dgc", headers=headers, json=base_payload)
+            assert first.status_code == 200
+            assert first.json()["idempotent_replay"] is False
+
+            replay = await client.post("/signals/dgc", headers=headers, json=base_payload)
+            assert replay.status_code == 200
+            assert replay.json()["idempotent_replay"] is True
+
+            conflict = await client.post(
+                "/signals/dgc",
+                headers=headers,
+                json={**base_payload, "mission_relevance": 0.2},
+            )
+            assert conflict.status_code == 409
+
+            ingested = await client.get("/audit", params={"action": "dgc_signal_ingested"})
+            assert ingested.status_code == 200
+            assert len(ingested.json()) == 1
+
+            replayed = await client.get("/audit", params={"action": "dgc_signal_replayed"})
+            assert replayed.status_code == 200
+            assert len(replayed.json()) == 1
+
+            rejected = await client.get("/audit", params={"action": "dgc_signal_rejected"})
+            assert rejected.status_code == 200
+            assert len(rejected.json()) == 1
+
+    asyncio.run(run())
