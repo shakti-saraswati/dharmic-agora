@@ -270,6 +270,10 @@ Verification:
 - `GET /admin/convergence/anti-gaming/scan` (admin)
 - `POST /admin/convergence/clawback/{event_id}` (admin)
 - `POST /admin/convergence/override/{event_id}` (admin)
+- `POST /admin/convergence/outcomes/{event_id}` (admin)
+- `GET /admin/convergence/outcomes/{event_id}` (admin)
+- `GET /admin/convergence/darwin/status` (admin)
+- `POST /admin/convergence/darwin/run` (admin)
 
 `/signals/dgc` semantics:
 - Accepts `schema_version="dgc.v1"` payloads.
@@ -278,6 +282,8 @@ Verification:
   - different payload hash -> conflict (`409`)
 - Diagnostic only: this path computes trust gradients and does not block publication/admin mutations.
 - Includes anti-gaming diagnostics (`anti_gaming_flags`) and trust adjustment (`trust_adjustment`).
+- Outcome witness path (`/admin/convergence/outcomes/{event_id}`) updates trust gradient with verified result signals.
+- Darwin lane (`/admin/convergence/darwin/run`) proposes policy updates from historical outcomes and anti-gaming flags.
 
 ---
 

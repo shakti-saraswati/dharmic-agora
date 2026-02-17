@@ -381,6 +381,18 @@ class TrustOverrideRequest(BaseModel):
     trust_adjustment: float = Field(0.0, ge=-0.6, le=0.6)
 
 
+class OutcomeWitnessRequest(BaseModel):
+    outcome_type: Literal["tests", "smoke", "human_acceptance", "user_feedback"]
+    status: Literal["pass", "fail"]
+    evidence: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DarwinRunRequest(BaseModel):
+    dry_run: bool = True
+    reason: str = Field("darwin_cycle", min_length=3, max_length=500)
+    run_validation: bool = False
+
+
 class PilotInviteRequest(BaseModel):
     cohort: str = "gated"
     expires_hours: int = 168
@@ -751,6 +763,12 @@ def _convergence_health_snapshot() -> Dict[str, int]:
         cursor.execute("SELECT COUNT(*) FROM trust_gradients")
         trust_gradient_count = int(cursor.fetchone()[0] or 0)
 
+        cursor.execute("SELECT COUNT(*) FROM outcome_witness")
+        outcome_witness_count = int(cursor.fetchone()[0] or 0)
+
+        cursor.execute("SELECT COUNT(*) FROM darwin_runs")
+        darwin_run_count = int(cursor.fetchone()[0] or 0)
+
         cursor.execute(
             """
             SELECT COUNT(*)
@@ -771,6 +789,8 @@ def _convergence_health_snapshot() -> Dict[str, int]:
         "dgc_signal_count": dgc_signal_count,
         "trust_gradient_count": trust_gradient_count,
         "low_trust_agents": low_trust_agents,
+        "outcome_witness_count": outcome_witness_count,
+        "darwin_run_count": darwin_run_count,
     }
 
 
@@ -1350,6 +1370,89 @@ async def admin_convergence_override(
         },
     )
     return {"status": "trust_override_applied", "event_id": event_id, "gradient": updated}
+
+
+@app.post("/admin/convergence/outcomes/{event_id}")
+async def admin_convergence_record_outcome(
+    event_id: str,
+    req: OutcomeWitnessRequest,
+    agent: dict = Depends(get_current_agent),
+):
+    """Record verified outcome evidence for an event and update trust gradient (admin only)."""
+    _require_admin_mutation(agent)
+    try:
+        result = _convergence.record_outcome(
+            event_id=event_id,
+            recorded_by=agent["address"],
+            outcome_type=req.outcome_type,
+            status=req.status,
+            evidence=req.evidence,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    record_audit(
+        "outcome_witness_recorded",
+        agent["address"],
+        "convergence_outcome",
+        None,
+        {
+            "event_id": event_id,
+            "outcome_type": req.outcome_type,
+            "status": req.status,
+            "trust_score": result["gradient"].get("trust_score", 0.0),
+            "trust_adjustment": result["gradient"].get("trust_adjustment", 0.0),
+        },
+    )
+    return result
+
+
+@app.get("/admin/convergence/outcomes/{event_id}")
+async def admin_convergence_list_outcomes(
+    event_id: str,
+    agent: dict = Depends(get_current_agent),
+):
+    """List outcome witness records for a convergence event (admin only)."""
+    _require_admin(agent)
+    return {"event_id": event_id, "outcomes": _convergence.outcomes_for_event(event_id)}
+
+
+@app.get("/admin/convergence/darwin/status")
+async def admin_convergence_darwin_status(
+    agent: dict = Depends(get_current_agent),
+):
+    """Show current Darwin policy and latest run status (admin only)."""
+    _require_admin(agent)
+    return _convergence.darwin_status()
+
+
+@app.post("/admin/convergence/darwin/run")
+async def admin_convergence_darwin_run(
+    req: DarwinRunRequest,
+    agent: dict = Depends(get_current_agent),
+):
+    """Run one Darwin cycle that proposes/accepts policy updates from outcome evidence."""
+    _require_admin_mutation(agent)
+    result = _convergence.run_darwin_cycle(
+        reviewer=agent["address"],
+        reason=req.reason,
+        dry_run=req.dry_run,
+        run_validation=req.run_validation,
+    )
+    record_audit(
+        "darwin_cycle_ran",
+        agent["address"],
+        "convergence_darwin",
+        None,
+        {
+            "run_id": result.get("run_id"),
+            "dry_run": req.dry_run,
+            "accepted": result.get("accepted"),
+            "accepted_if_not_dry_run": result.get("accepted_if_not_dry_run"),
+            "improvement": result.get("improvement"),
+        },
+    )
+    return result
 
 
 @app.post("/admin/approve/{queue_id}")

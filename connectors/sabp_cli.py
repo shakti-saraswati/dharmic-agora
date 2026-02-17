@@ -131,6 +131,22 @@ def main() -> None:
     p_override.add_argument("--reason", required=True)
     p_override.add_argument("--trust-adjustment", type=float, default=0.0)
 
+    p_outcome = sub.add_parser("outcome", help="Record admin outcome witness for an event")
+    p_outcome.add_argument("--event-id", required=True)
+    p_outcome.add_argument("--type", required=True, choices=["tests", "smoke", "human_acceptance", "user_feedback"])
+    p_outcome.add_argument("--status", required=True, choices=["pass", "fail"])
+    p_outcome.add_argument("--evidence", default="{}", help="JSON object or path to JSON")
+
+    p_outcomes = sub.add_parser("outcomes", help="List admin outcome witness records for an event")
+    p_outcomes.add_argument("--event-id", required=True)
+
+    p_darwin_status = sub.add_parser("darwin-status", help="Get admin Darwin policy + latest run")
+
+    p_darwin_run = sub.add_parser("darwin-run", help="Run one admin Darwin cycle")
+    p_darwin_run.add_argument("--reason", default="darwin_cycle")
+    p_darwin_run.add_argument("--apply", action="store_true", help="Apply candidate if improved")
+    p_darwin_run.add_argument("--run-validation", action="store_true")
+
     args = parser.parse_args()
 
     auth = SabpAuth(bearer_token=args.token, api_key=args.api_key)
@@ -199,6 +215,29 @@ def main() -> None:
                         args.event_id,
                         reason=args.reason,
                         trust_adjustment=args.trust_adjustment,
+                    ),
+                    args.format,
+                )
+            elif args.cmd == "outcome":
+                _emit(
+                    c.admin_record_outcome(
+                        args.event_id,
+                        outcome_type=args.type,
+                        status=args.status,
+                        evidence=_read_json(args.evidence),
+                    ),
+                    args.format,
+                )
+            elif args.cmd == "outcomes":
+                _emit(c.admin_list_outcomes(args.event_id), args.format)
+            elif args.cmd == "darwin-status":
+                _emit(c.admin_darwin_status(), args.format)
+            elif args.cmd == "darwin-run":
+                _emit(
+                    c.admin_darwin_run(
+                        dry_run=not args.apply,
+                        reason=args.reason,
+                        run_validation=args.run_validation,
                     ),
                     args.format,
                 )

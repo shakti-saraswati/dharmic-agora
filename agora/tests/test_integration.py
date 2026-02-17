@@ -127,6 +127,8 @@ class TestAuthFlow:
             "dgc_signal_count",
             "trust_gradient_count",
             "low_trust_agents",
+            "outcome_witness_count",
+            "darwin_run_count",
         }
 
     def test_root_endpoint(self, fresh_app):
@@ -488,6 +490,33 @@ class TestAdminQueue:
         assert override.json()["status"] == "trust_override_applied"
         assert override.json()["gradient"]["trust_adjustment"] == 0.0
 
+        outcome = client.post(
+            "/admin/convergence/outcomes/evt-admin-anti-2",
+            json={"outcome_type": "tests", "status": "pass", "evidence": {"suite": "integration"}},
+            headers=admin["headers"],
+        )
+        assert outcome.status_code == 200
+        assert outcome.json()["outcome"]["event_id"] == "evt-admin-anti-2"
+
+        outcomes = client.get(
+            "/admin/convergence/outcomes/evt-admin-anti-2",
+            headers=admin["headers"],
+        )
+        assert outcomes.status_code == 200
+        assert len(outcomes.json()["outcomes"]) >= 1
+
+        darwin_status = client.get("/admin/convergence/darwin/status", headers=admin["headers"])
+        assert darwin_status.status_code == 200
+        assert "policy" in darwin_status.json()
+
+        darwin_run = client.post(
+            "/admin/convergence/darwin/run",
+            json={"dry_run": True, "reason": "integration test", "run_validation": False},
+            headers=admin["headers"],
+        )
+        assert darwin_run.status_code == 200
+        assert "run_id" in darwin_run.json()
+
         applied = client.get("/audit", params={"action": "trust_clawback_applied"})
         assert applied.status_code == 200
         assert len(applied.json()) == 1
@@ -495,6 +524,14 @@ class TestAdminQueue:
         overridden = client.get("/audit", params={"action": "trust_clawback_overridden"})
         assert overridden.status_code == 200
         assert len(overridden.json()) == 1
+
+        outcome_audit = client.get("/audit", params={"action": "outcome_witness_recorded"})
+        assert outcome_audit.status_code == 200
+        assert len(outcome_audit.json()) >= 1
+
+        darwin_audit = client.get("/audit", params={"action": "darwin_cycle_ran"})
+        assert darwin_audit.status_code == 200
+        assert len(darwin_audit.json()) >= 1
 
 
 # =============================================================================

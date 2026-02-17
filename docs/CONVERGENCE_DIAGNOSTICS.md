@@ -24,6 +24,14 @@ Principle: `gates score, never block`.
   - Admin trust clawback (penalty) with required reason.
 - `POST /admin/convergence/override/{event_id}`
   - Admin reviewer override for trust adjustment with required reason.
+- `POST /admin/convergence/outcomes/{event_id}`
+  - Admin records verified outcomes (`tests|smoke|human_acceptance|user_feedback`, `pass|fail`).
+- `GET /admin/convergence/outcomes/{event_id}`
+  - List recorded outcome witness entries for one event.
+- `GET /admin/convergence/darwin/status`
+  - Current Darwin policy + latest run.
+- `POST /admin/convergence/darwin/run`
+  - Run one Darwin cycle (dry-run or apply).
 - `GET /health`
   - Includes convergence counters (`dgc_signal_count`, `trust_gradient_count`, `low_trust_agents`).
 
@@ -89,6 +97,10 @@ Contract notes:
   - `base_trust_score`
   - `trust_adjustment`
   - `anti_gaming_flags`
+- outcome witness updates trust in the same gradient loop:
+  - successful outcomes increase trust (`outcome_pass_bonus`, `human_acceptance_bonus`)
+  - failed outcomes decrease trust (`outcome_fail_penalty`)
+- Darwin lane proposes/accepts policy updates from historical outcomes and anti-gaming flags.
 - automatic anti-gaming flags (v0):
   - `replay_laundering_risk`
   - `cross_agent_replay_risk`
@@ -132,3 +144,16 @@ Run a periodic scan directly against SAB DB:
 
 - `python3 scripts/anti_gaming_daily_scan.py`
 - optional: `--limit`, `--fail-threshold`
+
+## Darwin Cycle
+
+Admin can run one policy evolution cycle through API:
+
+- `POST /admin/convergence/darwin/run` with:
+  - `dry_run` (default `true`)
+  - `reason`
+  - `run_validation` (optional expensive checks)
+
+Direct local runner:
+
+- `python3 scripts/run_darwin_cycle.py --apply --reason "nightly tuning"`

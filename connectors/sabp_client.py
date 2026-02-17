@@ -188,6 +188,61 @@ class SabpClient:
         _raise_for_status(r)
         return r.json()
 
+    def admin_record_outcome(
+        self,
+        event_id: str,
+        *,
+        outcome_type: str,
+        status: str,
+        evidence: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        r = self._client.post(
+            f"/admin/convergence/outcomes/{event_id}",
+            headers=self.auth.headers(),
+            json={
+                "outcome_type": outcome_type,
+                "status": status,
+                "evidence": evidence or {},
+            },
+        )
+        _raise_for_status(r)
+        return r.json()
+
+    def admin_list_outcomes(self, event_id: str) -> dict[str, Any]:
+        r = self._client.get(
+            f"/admin/convergence/outcomes/{event_id}",
+            headers=self.auth.headers(),
+        )
+        _raise_for_status(r)
+        return r.json()
+
+    def admin_darwin_status(self) -> dict[str, Any]:
+        r = self._client.get(
+            "/admin/convergence/darwin/status",
+            headers=self.auth.headers(),
+        )
+        _raise_for_status(r)
+        return r.json()
+
+    def admin_darwin_run(
+        self,
+        *,
+        dry_run: bool = True,
+        reason: str = "darwin_cycle",
+        run_validation: bool = False,
+    ) -> dict[str, Any]:
+        r = self._client.post(
+            "/admin/convergence/darwin/run",
+            headers=self.auth.headers(),
+            json={
+                "dry_run": dry_run,
+                "reason": reason,
+                "run_validation": run_validation,
+            },
+        )
+        _raise_for_status(r)
+        return r.json()
+
     def admin_approve(self, queue_id: int, reason: str | None = None) -> dict[str, Any]:
         r = self._client.post(
             f"/admin/approve/{queue_id}",
@@ -320,6 +375,61 @@ class SabpAsyncClient:
             f"/admin/convergence/override/{event_id}",
             headers=self.auth.headers(),
             json={"reason": reason, "trust_adjustment": trust_adjustment},
+        )
+        _raise_for_status(r)
+        return r.json()
+
+    async def admin_record_outcome(
+        self,
+        event_id: str,
+        *,
+        outcome_type: str,
+        status: str,
+        evidence: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        r = await self._client.post(
+            f"/admin/convergence/outcomes/{event_id}",
+            headers=self.auth.headers(),
+            json={
+                "outcome_type": outcome_type,
+                "status": status,
+                "evidence": evidence or {},
+            },
+        )
+        _raise_for_status(r)
+        return r.json()
+
+    async def admin_list_outcomes(self, event_id: str) -> dict[str, Any]:
+        r = await self._client.get(
+            f"/admin/convergence/outcomes/{event_id}",
+            headers=self.auth.headers(),
+        )
+        _raise_for_status(r)
+        return r.json()
+
+    async def admin_darwin_status(self) -> dict[str, Any]:
+        r = await self._client.get(
+            "/admin/convergence/darwin/status",
+            headers=self.auth.headers(),
+        )
+        _raise_for_status(r)
+        return r.json()
+
+    async def admin_darwin_run(
+        self,
+        *,
+        dry_run: bool = True,
+        reason: str = "darwin_cycle",
+        run_validation: bool = False,
+    ) -> dict[str, Any]:
+        r = await self._client.post(
+            "/admin/convergence/darwin/run",
+            headers=self.auth.headers(),
+            json={
+                "dry_run": dry_run,
+                "reason": reason,
+                "run_validation": run_validation,
+            },
         )
         _raise_for_status(r)
         return r.json()

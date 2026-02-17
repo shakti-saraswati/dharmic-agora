@@ -90,6 +90,9 @@ def test_identity_signal_ingest_updates_trust_and_landscape(fresh_api):
             trust_payload = dgc_resp.json()
             assert trust_payload["event_id"] == "evt-001"
             assert trust_payload["schema_version"] == "dgc.v1"
+            assert "base_trust_score" in trust_payload
+            assert "trust_adjustment" in trust_payload
+            assert "anti_gaming_flags" in trust_payload
             assert 0.0 <= trust_payload["trust_score"] <= 1.0
             assert trust_payload["low_trust_flag"] is False
 
@@ -630,3 +633,28 @@ def test_convergence_store_anti_gaming_report_and_adjustment_flow(tmp_path: Path
         reason="override accepted",
     )
     assert restored["trust_adjustment"] == 0.0
+
+    outcome = store.record_outcome(
+        "evt-store-anti-2",
+        recorded_by="admin_1",
+        outcome_type="tests",
+        status="pass",
+        evidence={"suite": "unit"},
+    )
+    assert outcome["outcome"]["event_id"] == "evt-store-anti-2"
+    assert len(store.outcomes_for_event("evt-store-anti-2")) == 1
+
+    baseline_policy = store.get_policy()
+    run = store.run_darwin_cycle(
+        reviewer="admin_1",
+        reason="unit cycle",
+        dry_run=True,
+        run_validation=False,
+    )
+    assert run["run_id"]
+    assert run["dry_run"] is True
+    assert "baseline" in run and "candidate" in run
+
+    status = store.darwin_status()
+    assert status["latest_run"]["run_id"] == run["run_id"]
+    assert status["policy"]["version"] == baseline_policy["version"]

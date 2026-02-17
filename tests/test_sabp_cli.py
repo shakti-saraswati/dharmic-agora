@@ -289,3 +289,98 @@ def test_cli_admin_anti_gaming_commands(
     override_out = json.loads(capsys.readouterr().out.strip())
     assert override_out["status"] == "trust_override_applied"
     assert override_out["trust_adjustment"] == 0.0
+
+
+def test_cli_outcome_and_darwin_commands(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class DummyClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def admin_record_outcome(self, event_id, outcome_type, status, evidence):
+            return {
+                "outcome": {
+                    "event_id": event_id,
+                    "outcome_type": outcome_type,
+                    "status": status,
+                    "evidence": evidence,
+                }
+            }
+
+        def admin_list_outcomes(self, event_id):
+            return {"event_id": event_id, "outcomes": [{"status": "pass"}]}
+
+        def admin_darwin_status(self):
+            return {"policy": {"version": 2}, "latest_run": {"run_id": "abc"}}
+
+        def admin_darwin_run(self, dry_run=True, reason="darwin_cycle", run_validation=False):
+            return {
+                "run_id": "run-1",
+                "dry_run": dry_run,
+                "reason": reason,
+                "run_validation": run_validation,
+            }
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(sabp_cli, "SabpClient", DummyClient)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "sabp_cli.py",
+            "--url",
+            "http://example",
+            "outcome",
+            "--event-id",
+            "evt-1",
+            "--type",
+            "tests",
+            "--status",
+            "pass",
+            "--evidence",
+            '{"suite":"core"}',
+        ],
+    )
+    sabp_cli.main()
+    out = json.loads(capsys.readouterr().out.strip())
+    assert out["outcome"]["event_id"] == "evt-1"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["sabp_cli.py", "--url", "http://example", "outcomes", "--event-id", "evt-1"],
+    )
+    sabp_cli.main()
+    outcomes = json.loads(capsys.readouterr().out.strip())
+    assert outcomes["event_id"] == "evt-1"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["sabp_cli.py", "--url", "http://example", "darwin-status"],
+    )
+    sabp_cli.main()
+    status = json.loads(capsys.readouterr().out.strip())
+    assert status["policy"]["version"] == 2
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "sabp_cli.py",
+            "--url",
+            "http://example",
+            "darwin-run",
+            "--reason",
+            "test cycle",
+            "--apply",
+        ],
+    )
+    sabp_cli.main()
+    run = json.loads(capsys.readouterr().out.strip())
+    assert run["dry_run"] is False

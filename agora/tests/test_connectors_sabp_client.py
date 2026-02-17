@@ -156,6 +156,14 @@ def test_sync_client_admin_convergence_methods() -> None:
             return httpx.Response(status_code=200, json={"status": "clawback_applied"}, request=request)
         if request.url.path.endswith("/override/evt-1"):
             return httpx.Response(status_code=200, json={"status": "trust_override_applied"}, request=request)
+        if request.url.path.endswith("/outcomes/evt-1") and request.method == "POST":
+            return httpx.Response(status_code=200, json={"outcome": {"event_id": "evt-1"}}, request=request)
+        if request.url.path.endswith("/outcomes/evt-1") and request.method == "GET":
+            return httpx.Response(status_code=200, json={"event_id": "evt-1", "outcomes": []}, request=request)
+        if request.url.path == "/admin/convergence/darwin/status":
+            return httpx.Response(status_code=200, json={"policy": {"version": 2}}, request=request)
+        if request.url.path == "/admin/convergence/darwin/run":
+            return httpx.Response(status_code=200, json={"run_id": "run-1"}, request=request)
         return httpx.Response(status_code=404, json={"detail": "not found"}, request=request)
 
     transport = httpx.MockTransport(handler)
@@ -167,7 +175,19 @@ def test_sync_client_admin_convergence_methods() -> None:
         assert claw["status"] == "clawback_applied"
         override = c.admin_convergence_override("evt-1", reason="override", trust_adjustment=0.0)
         assert override["status"] == "trust_override_applied"
+        outcome = c.admin_record_outcome("evt-1", outcome_type="tests", status="pass", evidence={"suite": "core"})
+        assert outcome["outcome"]["event_id"] == "evt-1"
+        outcomes = c.admin_list_outcomes("evt-1")
+        assert outcomes["event_id"] == "evt-1"
+        status = c.admin_darwin_status()
+        assert status["policy"]["version"] == 2
+        run = c.admin_darwin_run(dry_run=True, reason="cycle", run_validation=False)
+        assert run["run_id"] == "run-1"
 
     assert ("GET", "/admin/convergence/anti-gaming/scan") in calls
     assert ("POST", "/admin/convergence/clawback/evt-1") in calls
     assert ("POST", "/admin/convergence/override/evt-1") in calls
+    assert ("POST", "/admin/convergence/outcomes/evt-1") in calls
+    assert ("GET", "/admin/convergence/outcomes/evt-1") in calls
+    assert ("GET", "/admin/convergence/darwin/status") in calls
+    assert ("POST", "/admin/convergence/darwin/run") in calls

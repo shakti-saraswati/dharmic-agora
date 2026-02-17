@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import subprocess
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,6 +51,18 @@ class ConvergenceStore:
     MAX_METADATA_KEY_LEN = 80
     MAX_IDENTITY_METADATA_JSON_BYTES = 16_384
     MAX_SIGNAL_METADATA_JSON_BYTES = 24_576
+    DEFAULT_POLICY = {
+        "version": 1,
+        "replay_penalty": -0.12,
+        "cross_agent_replay_penalty": -0.18,
+        "collusion_penalty": -0.08,
+        "outcome_pass_bonus": 0.05,
+        "outcome_fail_penalty": -0.10,
+        "human_acceptance_bonus": 0.08,
+        "max_adjustment_abs": 0.60,
+    }
+    MIN_POLICY_VALUE = -0.60
+    MAX_POLICY_VALUE = 0.60
 
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
@@ -153,6 +166,50 @@ class ConvergenceStore:
                 """
             )
 
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS outcome_witness (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT NOT NULL,
+                    agent_address TEXT NOT NULL,
+                    recorded_by TEXT NOT NULL,
+                    outcome_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS darwin_policy (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    policy_json TEXT NOT NULL,
+                    updated_by TEXT NOT NULL,
+                    updated_reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS darwin_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL,
+                    dry_run INTEGER NOT NULL,
+                    baseline_policy_json TEXT NOT NULL,
+                    candidate_policy_json TEXT NOT NULL,
+                    baseline_objective REAL NOT NULL,
+                    candidate_objective REAL NOT NULL,
+                    accepted INTEGER NOT NULL,
+                    validation_json TEXT NOT NULL,
+                    notes TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+
             ensure_column(cursor, "trust_gradients", "base_trust_score", "base_trust_score REAL NOT NULL DEFAULT 0.0")
             ensure_column(cursor, "trust_gradients", "trust_adjustment", "trust_adjustment REAL NOT NULL DEFAULT 0.0")
             ensure_column(
@@ -187,6 +244,30 @@ class ConvergenceStore:
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_trust_score ON trust_gradients(trust_score DESC)"
             )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_outcome_event_created ON outcome_witness(event_id, created_at DESC)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_outcome_agent_created ON outcome_witness(agent_address, created_at DESC)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_darwin_runs_created ON darwin_runs(created_at DESC)"
+            )
+
+            cursor.execute("SELECT COUNT(*) FROM darwin_policy")
+            if int(cursor.fetchone()[0] or 0) == 0:
+                cursor.execute(
+                    """
+                    INSERT INTO darwin_policy (policy_json, updated_by, updated_reason, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        _canonical_json(self.DEFAULT_POLICY),
+                        "system_bootstrap",
+                        "initialize_default_policy",
+                        _utc_now(),
+                    ),
+                )
 
     @staticmethod
     def _parse_json(value: Any, fallback: Any) -> Any:
@@ -259,6 +340,86 @@ class ConvergenceStore:
         if len(encoded) > max_json_bytes:
             raise ValueError(f"{error_prefix}_metadata_exceeds_max_size")
         return metadata
+
+    def _validate_policy(self, raw: Dict[str, Any]) -> Dict[str, Any]:
+        policy = dict(self.DEFAULT_POLICY)
+        policy.update(raw or {})
+
+        if "version" in policy:
+            try:
+                policy["version"] = int(policy["version"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("invalid_policy_version") from exc
+        else:
+            policy["version"] = int(self.DEFAULT_POLICY["version"])
+
+        for key in (
+            "replay_penalty",
+            "cross_agent_replay_penalty",
+            "collusion_penalty",
+            "outcome_pass_bonus",
+            "outcome_fail_penalty",
+            "human_acceptance_bonus",
+            "max_adjustment_abs",
+        ):
+            try:
+                value = float(policy[key])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"invalid_policy_value_{key}") from exc
+            if value < self.MIN_POLICY_VALUE or value > self.MAX_POLICY_VALUE:
+                raise ValueError(f"policy_value_out_of_bounds_{key}")
+            policy[key] = round(value, 4)
+        policy["max_adjustment_abs"] = max(0.0, policy["max_adjustment_abs"])
+        return policy
+
+    def get_policy(self) -> Dict[str, Any]:
+        with self._conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM darwin_policy
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            )
+            row = cursor.fetchone()
+        if not row:
+            return dict(self.DEFAULT_POLICY)
+        raw = self._parse_json(row["policy_json"], {})
+        policy = self._validate_policy(raw if isinstance(raw, dict) else {})
+        policy["updated_by"] = row["updated_by"]
+        policy["updated_reason"] = row["updated_reason"]
+        policy["updated_at"] = row["created_at"]
+        return policy
+
+    def update_policy(
+        self,
+        policy: Dict[str, Any],
+        *,
+        updated_by: str,
+        updated_reason: str,
+    ) -> Dict[str, Any]:
+        validated = self._validate_policy(policy)
+        now = _utc_now()
+        with self._conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO darwin_policy (policy_json, updated_by, updated_reason, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    _canonical_json(validated),
+                    updated_by,
+                    updated_reason,
+                    now,
+                ),
+            )
+        out = dict(validated)
+        out["updated_by"] = updated_by
+        out["updated_reason"] = updated_reason
+        out["updated_at"] = now
+        return out
 
     def register_identity(
         self,
@@ -452,14 +613,73 @@ class ConvergenceStore:
         return sorted(set(flags))
 
     def _default_trust_adjustment(self, anti_gaming_flags: List[str]) -> float:
+        policy = self.get_policy()
+        max_abs = float(policy.get("max_adjustment_abs", self.MAX_TRUST_ADJUSTMENT_ABS))
         adjustment = 0.0
         if "replay_laundering_risk" in anti_gaming_flags:
-            adjustment += self.REPLAY_PENALTY
+            adjustment += float(policy.get("replay_penalty", self.REPLAY_PENALTY))
         if "cross_agent_replay_risk" in anti_gaming_flags:
-            adjustment += self.CROSS_AGENT_REPLAY_PENALTY
+            adjustment += float(policy.get("cross_agent_replay_penalty", self.CROSS_AGENT_REPLAY_PENALTY))
         if "source_alias_collusion_risk" in anti_gaming_flags:
-            adjustment += self.COLLUSION_PENALTY
-        return round(_clamp(adjustment, -self.MAX_TRUST_ADJUSTMENT_ABS, self.MAX_TRUST_ADJUSTMENT_ABS), 4)
+            adjustment += float(policy.get("collusion_penalty", self.COLLUSION_PENALTY))
+        return round(_clamp(adjustment, -max_abs, max_abs), 4)
+
+    @staticmethod
+    def _normalize_outcome_status(status: str) -> str:
+        norm = str(status or "").strip().lower()
+        if norm not in {"pass", "fail"}:
+            raise ValueError("invalid_outcome_status")
+        return norm
+
+    @staticmethod
+    def _normalize_outcome_type(outcome_type: str) -> str:
+        norm = str(outcome_type or "").strip().lower()
+        if norm not in {"tests", "smoke", "human_acceptance", "user_feedback"}:
+            raise ValueError("invalid_outcome_type")
+        return norm
+
+    def _outcome_delta_for_record(self, policy: Dict[str, Any], outcome_type: str, status: str) -> float:
+        status_norm = self._normalize_outcome_status(status)
+        kind = self._normalize_outcome_type(outcome_type)
+        if status_norm == "pass":
+            bonus = float(policy.get("outcome_pass_bonus", self.DEFAULT_POLICY["outcome_pass_bonus"]))
+            if kind == "human_acceptance":
+                bonus += float(
+                    policy.get("human_acceptance_bonus", self.DEFAULT_POLICY["human_acceptance_bonus"])
+                )
+            return round(bonus, 4)
+        return round(float(policy.get("outcome_fail_penalty", self.DEFAULT_POLICY["outcome_fail_penalty"])), 4)
+
+    def _outcome_adjustment_for_event(self, event_id: str, policy: Dict[str, Any]) -> float:
+        outcomes = self.outcomes_for_event(event_id)
+        if not outcomes:
+            return 0.0
+        adjustment = 0.0
+        for outcome in outcomes:
+            adjustment += self._outcome_delta_for_record(
+                policy,
+                str(outcome.get("outcome_type", "")),
+                str(outcome.get("status", "")),
+            )
+        max_abs = float(policy.get("max_adjustment_abs", self.MAX_TRUST_ADJUSTMENT_ABS))
+        return round(_clamp(adjustment, -max_abs, max_abs), 4)
+
+    def _component_adjustments(self, gradient: Dict[str, Any], policy: Dict[str, Any]) -> Dict[str, float]:
+        diagnostic = dict(gradient.get("diagnostic") or {})
+        anti = diagnostic.get("anti_gaming_auto_adjustment")
+        if anti is None:
+            anti = self._default_trust_adjustment(list(gradient.get("anti_gaming_flags") or []))
+        outcome = diagnostic.get("outcome_adjustment", 0.0)
+        manual = diagnostic.get("manual_adjustment")
+        total_existing = float(gradient.get("trust_adjustment") or 0.0)
+        if manual is None:
+            manual = total_existing - float(anti) - float(outcome)
+        max_abs = float(policy.get("max_adjustment_abs", self.MAX_TRUST_ADJUSTMENT_ABS))
+        return {
+            "anti": round(float(anti), 4),
+            "outcome": round(float(outcome), 4),
+            "manual": round(float(_clamp(float(manual), -max_abs, max_abs)), 4),
+        }
 
     def ingest_dgc_signal(
         self,
@@ -628,6 +848,9 @@ class ConvergenceStore:
             "high_collapse_dimensions": high_collapse,
             "anti_gaming_flags": anti_flags,
             "base_trust_score": base_trust_score,
+            "anti_gaming_auto_adjustment": trust_adjustment,
+            "outcome_adjustment": 0.0,
+            "manual_adjustment": 0.0,
             "trust_adjustment": trust_adjustment,
             "effective_trust_score": trust_score,
             "likely_causes": likely_causes,
@@ -853,9 +1076,9 @@ class ConvergenceStore:
         trust_adjustment: float,
         reason: str,
     ) -> Dict[str, Any]:
-        adjustment = round(
-            _clamp(float(trust_adjustment), -self.MAX_TRUST_ADJUSTMENT_ABS, self.MAX_TRUST_ADJUSTMENT_ABS), 4
-        )
+        policy = self.get_policy()
+        max_abs = float(policy.get("max_adjustment_abs", self.MAX_TRUST_ADJUSTMENT_ABS))
+        target_total = round(_clamp(float(trust_adjustment), -max_abs, max_abs), 4)
         with self._conn() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -870,19 +1093,26 @@ class ConvergenceStore:
             if not row:
                 raise ValueError("trust_event_not_found")
             current = self._decode_trust_row(row)
+            components = self._component_adjustments(current, policy)
+
             base = float(current.get("base_trust_score") or 0.0)
-            effective = round(_clamp(base + adjustment), 4)
+            manual = round(target_total - components["anti"] - components["outcome"], 4)
+            total = round(_clamp(components["anti"] + components["outcome"] + manual, -max_abs, max_abs), 4)
+            effective = round(_clamp(base + total), 4)
             low_trust = int(effective < self.LOW_TRUST_THRESHOLD)
 
             likely = list(current.get("likely_causes") or [])
-            if adjustment < 0.0:
+            if manual < 0.0:
                 likely = sorted(set(likely + ["manual_clawback"]))
             else:
                 likely = [x for x in likely if x != "manual_clawback"]
 
             diagnostic = dict(current.get("diagnostic") or {})
             diagnostic["base_trust_score"] = base
-            diagnostic["trust_adjustment"] = adjustment
+            diagnostic["anti_gaming_auto_adjustment"] = components["anti"]
+            diagnostic["outcome_adjustment"] = components["outcome"]
+            diagnostic["manual_adjustment"] = manual
+            diagnostic["trust_adjustment"] = total
             diagnostic["effective_trust_score"] = effective
             diagnostic["reviewer_address"] = reviewer_address
             diagnostic["adjustment_reason"] = reason
@@ -901,7 +1131,7 @@ class ConvergenceStore:
                 WHERE signal_event_id = ?
                 """,
                 (
-                    adjustment,
+                    total,
                     effective,
                     low_trust,
                     json.dumps(likely),
@@ -936,6 +1166,401 @@ class ConvergenceStore:
             trust_adjustment=target_adjustment,
             reason=reason,
         )
+
+    def outcomes_for_event(self, event_id: str) -> List[Dict[str, Any]]:
+        with self._conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM outcome_witness
+                WHERE event_id = ?
+                ORDER BY id ASC
+                """,
+                (event_id,),
+            )
+            rows = [dict(row) for row in cursor.fetchall()]
+        for row in rows:
+            row["evidence"] = self._parse_json(row.pop("evidence_json"), {})
+        return rows
+
+    def record_outcome(
+        self,
+        event_id: str,
+        *,
+        recorded_by: str,
+        outcome_type: str,
+        status: str,
+        evidence: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        outcome_type_norm = self._normalize_outcome_type(outcome_type)
+        status_norm = self._normalize_outcome_status(status)
+        evidence_obj = evidence if isinstance(evidence, dict) else {"note": str(evidence or "")}
+
+        existing = self._fetch_trust_by_event(event_id)
+        if not existing:
+            raise ValueError("trust_event_not_found")
+
+        now = _utc_now()
+        with self._conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO outcome_witness (
+                    event_id, agent_address, recorded_by, outcome_type, status, evidence_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    existing["agent_address"],
+                    recorded_by,
+                    outcome_type_norm,
+                    status_norm,
+                    json.dumps(evidence_obj),
+                    now,
+                ),
+            )
+            outcome_id = cursor.lastrowid
+
+        policy = self.get_policy()
+        outcomes = self.outcomes_for_event(event_id)
+        outcome_adjustment = self._outcome_adjustment_for_event(event_id, policy)
+        current = self._fetch_trust_by_event(event_id)
+        if not current:
+            raise ValueError("trust_event_not_found")
+        components = self._component_adjustments(current, policy)
+        max_abs = float(policy.get("max_adjustment_abs", self.MAX_TRUST_ADJUSTMENT_ABS))
+        total_adjustment = round(
+            _clamp(components["anti"] + outcome_adjustment + components["manual"], -max_abs, max_abs), 4
+        )
+        base = float(current.get("base_trust_score") or 0.0)
+        trust_score = round(_clamp(base + total_adjustment), 4)
+        low_trust = int(trust_score < self.LOW_TRUST_THRESHOLD)
+
+        likely = list(current.get("likely_causes") or [])
+        if status_norm == "pass":
+            likely = sorted(set([x for x in likely if x != "verified_failure"] + ["verified_outcome"]))
+        else:
+            likely = sorted(set([x for x in likely if x != "verified_outcome"] + ["verified_failure"]))
+
+        diagnostic = dict(current.get("diagnostic") or {})
+        diagnostic["base_trust_score"] = base
+        diagnostic["anti_gaming_auto_adjustment"] = components["anti"]
+        diagnostic["outcome_adjustment"] = outcome_adjustment
+        diagnostic["manual_adjustment"] = components["manual"]
+        diagnostic["trust_adjustment"] = total_adjustment
+        diagnostic["effective_trust_score"] = trust_score
+        diagnostic["outcomes_seen"] = len(outcomes)
+        diagnostic["latest_outcome"] = {
+            "outcome_type": outcome_type_norm,
+            "status": status_norm,
+            "recorded_by": recorded_by,
+            "recorded_at": now,
+        }
+
+        with self._conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE trust_gradients
+                SET trust_adjustment = ?,
+                    trust_score = ?,
+                    low_trust_flag = ?,
+                    likely_causes_json = ?,
+                    diagnostic_json = ?,
+                    adjusted_at = ?
+                WHERE signal_event_id = ?
+                """,
+                (
+                    total_adjustment,
+                    trust_score,
+                    low_trust,
+                    json.dumps(likely),
+                    json.dumps(diagnostic),
+                    now,
+                    event_id,
+                ),
+            )
+
+        updated = self._fetch_trust_by_event(event_id)
+        if not updated:
+            raise ValueError("trust_event_not_found")
+        return {
+            "outcome": {
+                "id": outcome_id,
+                "event_id": event_id,
+                "outcome_type": outcome_type_norm,
+                "status": status_norm,
+                "recorded_by": recorded_by,
+                "evidence": evidence_obj,
+                "created_at": now,
+            },
+            "gradient": updated,
+        }
+
+    def _events_with_outcomes(self, limit: int = 400) -> List[Dict[str, Any]]:
+        with self._conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT t.*
+                FROM trust_gradients t
+                WHERE EXISTS (
+                    SELECT 1 FROM outcome_witness o WHERE o.event_id = t.signal_event_id
+                )
+                ORDER BY t.id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            rows = [self._decode_trust_row(row) for row in cursor.fetchall()]
+        for row in rows:
+            outcomes = self.outcomes_for_event(row["signal_event_id"])
+            row["outcomes"] = outcomes
+        return rows
+
+    def _simulate_adjustment_for_row(self, row: Dict[str, Any], policy: Dict[str, Any]) -> float:
+        anti = self._default_trust_adjustment(list(row.get("anti_gaming_flags") or []))
+        manual = float((row.get("diagnostic") or {}).get("manual_adjustment", 0.0) or 0.0)
+        outcome_adj = 0.0
+        for outcome in row.get("outcomes", []):
+            outcome_adj += self._outcome_delta_for_record(
+                policy,
+                str(outcome.get("outcome_type", "")),
+                str(outcome.get("status", "")),
+            )
+        max_abs = float(policy.get("max_adjustment_abs", self.MAX_TRUST_ADJUSTMENT_ABS))
+        return round(_clamp(anti + manual + outcome_adj, -max_abs, max_abs), 4)
+
+    def evaluate_policy_objective(self, policy: Dict[str, Any], *, limit: int = 400) -> Dict[str, Any]:
+        validated = self._validate_policy(policy)
+        rows = self._events_with_outcomes(limit=limit)
+        if not rows:
+            return {"objective": 0.0, "coverage": 0, "false_positive_rate": 0.0}
+
+        scores: List[float] = []
+        flagged_total = 0
+        flagged_pass = 0
+        for row in rows:
+            outcomes = row.get("outcomes") or []
+            if not outcomes:
+                continue
+            pass_ratio = _safe_avg(
+                [1.0 if str(o.get("status")) == "pass" else 0.0 for o in outcomes],
+                default=0.0,
+            )
+            base = float(row.get("base_trust_score") or 0.0)
+            adjustment = self._simulate_adjustment_for_row(row, validated)
+            effective = _clamp(base + adjustment)
+            scores.append(1.0 - abs(effective - pass_ratio))
+
+            flags = list(row.get("anti_gaming_flags") or [])
+            if flags:
+                flagged_total += 1
+                if pass_ratio >= 0.66:
+                    flagged_pass += 1
+
+        objective = round(_safe_avg(scores, default=0.0), 6)
+        false_positive_rate = round((flagged_pass / flagged_total), 6) if flagged_total else 0.0
+        return {
+            "objective": objective,
+            "coverage": len(scores),
+            "false_positive_rate": false_positive_rate,
+        }
+
+    def _propose_policy_candidate(self, policy: Dict[str, Any], *, limit: int = 400) -> Dict[str, Any]:
+        baseline = self._validate_policy(policy)
+        rows = self._events_with_outcomes(limit=limit)
+        if not rows:
+            candidate = dict(baseline)
+            candidate["version"] = int(baseline["version"]) + 1
+            return candidate
+
+        flagged = 0
+        false_positive = 0
+        true_positive = 0
+        all_pass_ratios: List[float] = []
+        for row in rows:
+            outcomes = row.get("outcomes") or []
+            if not outcomes:
+                continue
+            pass_ratio = _safe_avg(
+                [1.0 if str(o.get("status")) == "pass" else 0.0 for o in outcomes],
+                default=0.0,
+            )
+            all_pass_ratios.append(pass_ratio)
+            if row.get("anti_gaming_flags"):
+                flagged += 1
+                if pass_ratio >= 0.66:
+                    false_positive += 1
+                elif pass_ratio <= 0.33:
+                    true_positive += 1
+
+        candidate = dict(baseline)
+        step_penalty = 0.02
+        if false_positive > true_positive:
+            candidate["replay_penalty"] = round(candidate["replay_penalty"] + step_penalty, 4)
+            candidate["cross_agent_replay_penalty"] = round(
+                candidate["cross_agent_replay_penalty"] + step_penalty,
+                4,
+            )
+            candidate["collusion_penalty"] = round(candidate["collusion_penalty"] + step_penalty, 4)
+        elif true_positive > false_positive:
+            candidate["replay_penalty"] = round(candidate["replay_penalty"] - step_penalty, 4)
+            candidate["cross_agent_replay_penalty"] = round(
+                candidate["cross_agent_replay_penalty"] - step_penalty,
+                4,
+            )
+            candidate["collusion_penalty"] = round(candidate["collusion_penalty"] - step_penalty, 4)
+
+        avg_pass = _safe_avg(all_pass_ratios, default=0.5)
+        if avg_pass >= 0.70:
+            candidate["outcome_pass_bonus"] = round(candidate["outcome_pass_bonus"] + 0.01, 4)
+            candidate["outcome_fail_penalty"] = round(candidate["outcome_fail_penalty"] + 0.01, 4)
+        elif avg_pass <= 0.40:
+            candidate["outcome_pass_bonus"] = round(candidate["outcome_pass_bonus"] - 0.01, 4)
+            candidate["outcome_fail_penalty"] = round(candidate["outcome_fail_penalty"] - 0.01, 4)
+
+        candidate["version"] = int(baseline["version"]) + 1
+        return self._validate_policy(candidate)
+
+    @staticmethod
+    def _run_validation_commands(commands: List[str], cwd: Path) -> Dict[str, Any]:
+        results: List[Dict[str, Any]] = []
+        ok = True
+        for command in commands:
+            proc = subprocess.run(
+                command,
+                cwd=str(cwd),
+                shell=True,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            entry = {
+                "command": command,
+                "returncode": int(proc.returncode),
+                "stdout_tail": proc.stdout[-1200:],
+                "stderr_tail": proc.stderr[-1200:],
+            }
+            results.append(entry)
+            if proc.returncode != 0:
+                ok = False
+                break
+        return {"ok": ok, "results": results}
+
+    def run_darwin_cycle(
+        self,
+        *,
+        reviewer: str,
+        reason: str,
+        dry_run: bool = True,
+        run_validation: bool = False,
+        validation_commands: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        baseline_policy = self.get_policy()
+        candidate_policy = self._propose_policy_candidate(baseline_policy)
+
+        baseline_eval = self.evaluate_policy_objective(baseline_policy)
+        candidate_eval = self.evaluate_policy_objective(candidate_policy)
+
+        validation = {"ok": True, "results": []}
+        if run_validation:
+            default_commands = [
+                "python3 -m pytest tests/test_convergence.py -q",
+                "bash scripts/smoke_test.sh",
+            ]
+            validation = self._run_validation_commands(
+                validation_commands or default_commands,
+                cwd=self.db_path.parent.parent if self.db_path.name else Path("."),
+            )
+
+        improvement = float(candidate_eval["objective"]) - float(baseline_eval["objective"])
+        accepted = improvement > 0.002 and bool(validation.get("ok", True))
+
+        active_policy = baseline_policy
+        if accepted and not dry_run:
+            active_policy = self.update_policy(
+                candidate_policy,
+                updated_by=reviewer,
+                updated_reason=reason,
+            )
+
+        run_id = hashlib.sha256(
+            _canonical_json(
+                {
+                    "baseline": baseline_policy,
+                    "candidate": candidate_policy,
+                    "reason": reason,
+                    "reviewer": reviewer,
+                    "ts": _utc_now(),
+                }
+            ).encode("utf-8")
+        ).hexdigest()[:20]
+
+        notes = (
+            "accepted" if (accepted and not dry_run) else
+            "candidate_better_but_dry_run" if accepted else
+            "candidate_not_improved_or_validation_failed"
+        )
+        with self._conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO darwin_runs (
+                    run_id, status, dry_run, baseline_policy_json, candidate_policy_json,
+                    baseline_objective, candidate_objective, accepted, validation_json, notes, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    "completed",
+                    int(bool(dry_run)),
+                    _canonical_json(baseline_policy),
+                    _canonical_json(candidate_policy),
+                    float(baseline_eval["objective"]),
+                    float(candidate_eval["objective"]),
+                    int(bool(accepted and (not dry_run))),
+                    json.dumps(validation),
+                    notes,
+                    _utc_now(),
+                ),
+            )
+
+        return {
+            "run_id": run_id,
+            "accepted": bool(accepted and (not dry_run)),
+            "accepted_if_not_dry_run": bool(accepted),
+            "dry_run": bool(dry_run),
+            "baseline": baseline_eval,
+            "candidate": candidate_eval,
+            "improvement": round(improvement, 6),
+            "validation": validation,
+            "baseline_policy": baseline_policy,
+            "candidate_policy": candidate_policy,
+            "active_policy": active_policy,
+            "notes": notes,
+        }
+
+    def darwin_status(self) -> Dict[str, Any]:
+        with self._conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM darwin_runs
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            )
+            row = cursor.fetchone()
+        latest = None
+        if row:
+            latest = dict(row)
+            latest["baseline_policy"] = self._parse_json(latest.pop("baseline_policy_json"), {})
+            latest["candidate_policy"] = self._parse_json(latest.pop("candidate_policy_json"), {})
+            latest["validation"] = self._parse_json(latest.pop("validation_json"), {})
+            latest["dry_run"] = bool(latest.get("dry_run"))
+            latest["accepted"] = bool(latest.get("accepted"))
+        return {"policy": self.get_policy(), "latest_run": latest}
 
     def anti_gaming_report(self, limit: int = ANTI_GAMING_SCAN_LIMIT) -> Dict[str, Any]:
         with self._conn() as conn:

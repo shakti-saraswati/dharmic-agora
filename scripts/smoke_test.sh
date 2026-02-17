@@ -244,6 +244,22 @@ try:
         r.raise_for_status()
         assert r.json()["status"] == "trust_override_applied"
 
+        r = raw.post(
+            f"/admin/convergence/outcomes/smoke-{queue_id}",
+            headers=admin_headers,
+            json={"outcome_type": "tests", "status": "pass", "evidence": {"suite": "smoke"}},
+        )
+        r.raise_for_status()
+        assert r.json()["outcome"]["event_id"] == f"smoke-{queue_id}"
+
+        r = raw.post(
+            "/admin/convergence/darwin/run",
+            headers=admin_headers,
+            json={"dry_run": True, "reason": "smoke cycle", "run_validation": False},
+        )
+        r.raise_for_status()
+        assert "run_id" in r.json()
+
     c.auth.bearer_token = admin_jwt
     c.auth.api_key = None
     approved = c.admin_approve(queue_id, reason="smoke test approve")

@@ -82,6 +82,9 @@ def test_dgc_ingest_and_landscape(fresh_app):
     assert signal_resp.status_code == 200
     assert signal_resp.json()["event_id"] == "evt-sync-1"
     assert signal_resp.json()["schema_version"] == "dgc.v1"
+    assert "base_trust_score" in signal_resp.json()
+    assert "trust_adjustment" in signal_resp.json()
+    assert "anti_gaming_flags" in signal_resp.json()
     assert signal_resp.json()["low_trust_flag"] is False
 
     trust_resp = client.get(f"/convergence/trust/{address}")
