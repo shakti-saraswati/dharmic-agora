@@ -371,6 +371,16 @@ class ReasonRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class TrustClawbackRequest(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=500)
+    penalty: float = Field(0.15, gt=0.0, le=0.6)
+
+
+class TrustOverrideRequest(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=500)
+    trust_adjustment: float = Field(0.0, ge=-0.6, le=0.6)
+
+
 class PilotInviteRequest(BaseModel):
     cohort: str = "gated"
     expires_hours: int = 168
@@ -622,9 +632,12 @@ class DGCSignalRequest(BaseModel):
 class DGCSignalResponse(BaseModel):
     event_id: str
     schema_version: str
+    base_trust_score: float
     trust_score: float
+    trust_adjustment: float
     low_trust_flag: bool
     idempotent_replay: bool
+    anti_gaming_flags: List[str]
     likely_causes: List[str]
     weak_gates: List[str]
 
@@ -1179,9 +1192,12 @@ async def ingest_dgc_signal(
     return DGCSignalResponse(
         event_id=req.event_id,
         schema_version=req.schema_version,
+        base_trust_score=float(gradient.get("base_trust_score", gradient.get("trust_score", 0.0))),
         trust_score=float(gradient.get("trust_score", 0.0)),
+        trust_adjustment=float(gradient.get("trust_adjustment", 0.0)),
         low_trust_flag=bool(gradient.get("low_trust_flag", False)),
         idempotent_replay=was_replay,
+        anti_gaming_flags=list(gradient.get("anti_gaming_flags", [])),
         likely_causes=list(gradient.get("likely_causes", [])),
         weak_gates=list(gradient.get("weak_gates", [])),
     )
@@ -1226,8 +1242,11 @@ async def admin_queue(
             latest = latest_trust.get(str(item["author_address"]))
             item["trust_gradient"] = (
                 {
+                    "base_trust_score": latest["base_trust_score"],
                     "trust_score": latest["trust_score"],
+                    "trust_adjustment": latest["trust_adjustment"],
                     "low_trust_flag": latest["low_trust_flag"],
+                    "anti_gaming_flags": latest.get("anti_gaming_flags", []),
                     "likely_causes": latest["likely_causes"],
                 }
                 if latest
@@ -1241,6 +1260,96 @@ async def admin_safety(agent: dict = Depends(get_current_agent)):
     """Current shadow-loop safety state for moderation/admin decisions."""
     _require_admin(agent)
     return _load_shadow_safety_state()
+
+
+@app.get("/admin/convergence/anti-gaming/scan")
+async def admin_convergence_anti_gaming_scan(
+    agent: dict = Depends(get_current_agent),
+    limit: int = Query(500, ge=50, le=5000),
+):
+    """Run anti-gaming scan over recent convergence events (admin only)."""
+    _require_admin(agent)
+    report = _convergence.anti_gaming_report(limit=limit)
+    record_audit(
+        "anti_gaming_scan_ran",
+        agent["address"],
+        "convergence",
+        None,
+        {
+            "limit": limit,
+            "suspicious_count": report["summary"].get("suspicious_count", 0),
+            "collusion_alias_cluster_count": report["summary"].get("collusion_alias_cluster_count", 0),
+            "cross_agent_artifact_replay_count": report["summary"].get("cross_agent_artifact_replay_count", 0),
+        },
+    )
+    return report
+
+
+@app.post("/admin/convergence/clawback/{event_id}")
+async def admin_convergence_clawback(
+    event_id: str,
+    req: TrustClawbackRequest,
+    agent: dict = Depends(get_current_agent),
+):
+    """Apply manual trust clawback to a convergence event (admin only)."""
+    _require_admin_mutation(agent)
+    try:
+        updated = _convergence.apply_clawback(
+            event_id=event_id,
+            reviewer_address=agent["address"],
+            penalty=req.penalty,
+            reason=req.reason,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    record_audit(
+        "trust_clawback_applied",
+        agent["address"],
+        "convergence_trust",
+        None,
+        {
+            "event_id": event_id,
+            "penalty": req.penalty,
+            "reason": req.reason,
+            "trust_adjustment": updated.get("trust_adjustment", 0.0),
+            "effective_trust_score": updated.get("trust_score", 0.0),
+        },
+    )
+    return {"status": "clawback_applied", "event_id": event_id, "gradient": updated}
+
+
+@app.post("/admin/convergence/override/{event_id}")
+async def admin_convergence_override(
+    event_id: str,
+    req: TrustOverrideRequest,
+    agent: dict = Depends(get_current_agent),
+):
+    """Override trust adjustment for a convergence event (admin only)."""
+    _require_admin_mutation(agent)
+    try:
+        updated = _convergence.set_trust_adjustment(
+            event_id=event_id,
+            reviewer_address=agent["address"],
+            trust_adjustment=req.trust_adjustment,
+            reason=req.reason,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    record_audit(
+        "trust_clawback_overridden",
+        agent["address"],
+        "convergence_trust",
+        None,
+        {
+            "event_id": event_id,
+            "reason": req.reason,
+            "trust_adjustment": req.trust_adjustment,
+            "effective_trust_score": updated.get("trust_score", 0.0),
+        },
+    )
+    return {"status": "trust_override_applied", "event_id": event_id, "gradient": updated}
 
 
 @app.post("/admin/approve/{queue_id}")

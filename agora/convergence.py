@@ -38,6 +38,11 @@ class ConvergenceStore:
     """Persistence and scoring for trust gradients and convergence views."""
 
     LOW_TRUST_THRESHOLD = 0.45
+    MAX_TRUST_ADJUSTMENT_ABS = 0.60
+    REPLAY_PENALTY = -0.12
+    CROSS_AGENT_REPLAY_PENALTY = -0.18
+    COLLUSION_PENALTY = -0.08
+    ANTI_GAMING_SCAN_LIMIT = 500
     MAX_AFFINITY_ITEMS = 32
     MAX_AFFINITY_LEN = 80
     MAX_IDENTITY_METADATA_ITEMS = 64
@@ -64,6 +69,12 @@ class ConvergenceStore:
             conn.close()
 
     def _init_db(self) -> None:
+        def ensure_column(cursor: sqlite3.Cursor, table: str, column_name: str, column_def: str) -> None:
+            cursor.execute(f"PRAGMA table_info({table})")
+            existing = {row[1] for row in cursor.fetchall()}
+            if column_name not in existing:
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
+
         with self._conn() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -117,22 +128,47 @@ class ConvergenceStore:
                     task_id TEXT,
                     task_type TEXT,
                     artifact_id TEXT,
+                    base_trust_score REAL NOT NULL DEFAULT 0.0,
                     trust_score REAL NOT NULL,
+                    trust_adjustment REAL NOT NULL DEFAULT 0.0,
                     low_trust_flag INTEGER NOT NULL,
                     gate_component REAL NOT NULL,
                     mission_component REAL NOT NULL,
                     collapse_component REAL NOT NULL,
                     self_alignment_component REAL NOT NULL,
                     affinity_match_component REAL NOT NULL,
+                    anti_gaming_flags_json TEXT NOT NULL DEFAULT '[]',
                     weak_gates_json TEXT NOT NULL,
                     strong_gates_json TEXT NOT NULL,
                     high_collapse_json TEXT NOT NULL,
                     likely_causes_json TEXT NOT NULL,
                     diagnostic_json TEXT NOT NULL,
+                    adjustment_reviewer TEXT,
+                    adjustment_reason TEXT,
+                    adjusted_at TEXT,
                     audit_hash TEXT,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (dgc_signal_id) REFERENCES dgc_signals(id)
                 )
+                """
+            )
+
+            ensure_column(cursor, "trust_gradients", "base_trust_score", "base_trust_score REAL NOT NULL DEFAULT 0.0")
+            ensure_column(cursor, "trust_gradients", "trust_adjustment", "trust_adjustment REAL NOT NULL DEFAULT 0.0")
+            ensure_column(
+                cursor,
+                "trust_gradients",
+                "anti_gaming_flags_json",
+                "anti_gaming_flags_json TEXT NOT NULL DEFAULT '[]'",
+            )
+            ensure_column(cursor, "trust_gradients", "adjustment_reviewer", "adjustment_reviewer TEXT")
+            ensure_column(cursor, "trust_gradients", "adjustment_reason", "adjustment_reason TEXT")
+            ensure_column(cursor, "trust_gradients", "adjusted_at", "adjusted_at TEXT")
+            cursor.execute(
+                """
+                UPDATE trust_gradients
+                SET base_trust_score = trust_score
+                WHERE base_trust_score = 0.0 AND trust_score != 0.0
                 """
             )
 
@@ -343,6 +379,88 @@ class ConvergenceStore:
             "signature": str(payload.get("signature") or "") or None,
         }
 
+    @staticmethod
+    def _signal_fingerprint(payload: Dict[str, Any]) -> str:
+        material = {
+            "task_type": payload.get("task_type"),
+            "artifact_id": payload.get("artifact_id"),
+            "source_alias": payload.get("source_alias"),
+            "gate_scores": payload.get("gate_scores") or {},
+            "collapse_dimensions": payload.get("collapse_dimensions") or {},
+            "mission_relevance": payload.get("mission_relevance"),
+        }
+        return hashlib.sha256(_canonical_json(material).encode("utf-8")).hexdigest()
+
+    def _detect_anti_gaming_flags(self, signal: Dict[str, Any], recent_limit: int = 200) -> List[str]:
+        fingerprint = self._signal_fingerprint(signal)
+        same_agent_replay_count = 0
+        cross_agent_replay_count = 0
+        artifact_cross_agent_count = 0
+        alias_agent_set: set[str] = set()
+
+        with self._conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT event_id, agent_address, artifact_id, source_alias,
+                       gate_scores_json, collapse_dimensions_json, mission_relevance, task_type
+                FROM dgc_signals
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (recent_limit,),
+            )
+            rows = cursor.fetchall()
+
+        for row in rows:
+            if row["event_id"] == signal["event_id"]:
+                continue
+            row_gate = self._parse_json(row["gate_scores_json"], {})
+            row_collapse = self._parse_json(row["collapse_dimensions_json"], {})
+            row_payload = {
+                "task_type": row["task_type"],
+                "artifact_id": row["artifact_id"],
+                "source_alias": row["source_alias"],
+                "gate_scores": row_gate,
+                "collapse_dimensions": row_collapse,
+                "mission_relevance": row["mission_relevance"],
+            }
+            row_fp = self._signal_fingerprint(row_payload)
+            row_agent = str(row["agent_address"])
+
+            if row_fp == fingerprint:
+                if row_agent == signal["agent_address"]:
+                    same_agent_replay_count += 1
+                else:
+                    cross_agent_replay_count += 1
+
+            if signal.get("artifact_id") and row["artifact_id"] == signal["artifact_id"] and row_agent != signal["agent_address"]:
+                artifact_cross_agent_count += 1
+
+            if signal.get("source_alias") and row["source_alias"] == signal["source_alias"]:
+                alias_agent_set.add(row_agent)
+
+        flags: List[str] = []
+        if same_agent_replay_count >= 1:
+            flags.append("replay_laundering_risk")
+        if cross_agent_replay_count >= 1 or artifact_cross_agent_count >= 1:
+            flags.append("cross_agent_replay_risk")
+        alias_other_agents = alias_agent_set.difference({str(signal["agent_address"])})
+        if signal.get("source_alias") and len(alias_other_agents) >= 2:
+            flags.append("source_alias_collusion_risk")
+
+        return sorted(set(flags))
+
+    def _default_trust_adjustment(self, anti_gaming_flags: List[str]) -> float:
+        adjustment = 0.0
+        if "replay_laundering_risk" in anti_gaming_flags:
+            adjustment += self.REPLAY_PENALTY
+        if "cross_agent_replay_risk" in anti_gaming_flags:
+            adjustment += self.CROSS_AGENT_REPLAY_PENALTY
+        if "source_alias_collusion_risk" in anti_gaming_flags:
+            adjustment += self.COLLUSION_PENALTY
+        return round(_clamp(adjustment, -self.MAX_TRUST_ADJUSTMENT_ABS, self.MAX_TRUST_ADJUSTMENT_ABS), 4)
+
     def ingest_dgc_signal(
         self,
         agent_address: str,
@@ -431,7 +549,10 @@ class ConvergenceStore:
         self,
         signal: Dict[str, Any],
         identity: Optional[Dict[str, Any]],
+        anti_gaming_flags: Optional[List[str]] = None,
+        trust_adjustment: float = 0.0,
     ) -> Dict[str, Any]:
+        anti_flags = sorted(set(anti_gaming_flags or []))
         gate_scores = signal.get("gate_scores") or {}
         collapse_dimensions = signal.get("collapse_dimensions") or {}
         mission_component = (
@@ -471,7 +592,11 @@ class ConvergenceStore:
             + 0.25 * self_alignment_component
             + 0.15 * affinity_match_component
         )
-        trust_score = round(trust_score, 4)
+        base_trust_score = round(trust_score, 4)
+        trust_adjustment = round(
+            _clamp(float(trust_adjustment), -self.MAX_TRUST_ADJUSTMENT_ABS, self.MAX_TRUST_ADJUSTMENT_ABS), 4
+        )
+        trust_score = round(_clamp(base_trust_score + trust_adjustment), 4)
 
         weak_gates = sorted([name for name, score in gate_scores.items() if float(score) < 0.45])
         strong_gates = sorted([name for name, score in gate_scores.items() if float(score) >= 0.75])
@@ -488,6 +613,8 @@ class ConvergenceStore:
             likely_causes.append("task_affinity_mismatch")
         if self_grade is not None and abs(self_grade - observed_performance) >= 0.25:
             likely_causes.append("self_assessment_gap")
+        if anti_flags:
+            likely_causes.append("anti_gaming_review_required")
         if not likely_causes:
             likely_causes.append("on_track")
 
@@ -499,6 +626,10 @@ class ConvergenceStore:
             "weak_gates": weak_gates,
             "strong_gates": strong_gates,
             "high_collapse_dimensions": high_collapse,
+            "anti_gaming_flags": anti_flags,
+            "base_trust_score": base_trust_score,
+            "trust_adjustment": trust_adjustment,
+            "effective_trust_score": trust_score,
             "likely_causes": likely_causes,
             "suggested_action": (
                 "reroute_to_affinity_or_improve_context" if low_trust_flag else "continue_gradient_path"
@@ -507,12 +638,15 @@ class ConvergenceStore:
 
         return {
             "trust_score": trust_score,
+            "base_trust_score": base_trust_score,
+            "trust_adjustment": trust_adjustment,
             "low_trust_flag": bool(low_trust_flag),
             "gate_component": round(gate_component, 4),
             "mission_component": round(mission_component, 4),
             "collapse_component": round(collapse_component, 4),
             "self_alignment_component": round(self_alignment_component, 4),
             "affinity_match_component": round(affinity_match_component, 4),
+            "anti_gaming_flags": anti_flags,
             "weak_gates": weak_gates,
             "strong_gates": strong_gates,
             "high_collapse": high_collapse,
@@ -522,12 +656,22 @@ class ConvergenceStore:
 
     def _decode_trust_row(self, row: sqlite3.Row | Dict[str, Any]) -> Dict[str, Any]:
         out = dict(row)
-        out["weak_gates"] = self._parse_json(out.pop("weak_gates_json"), [])
-        out["strong_gates"] = self._parse_json(out.pop("strong_gates_json"), [])
-        out["high_collapse"] = self._parse_json(out.pop("high_collapse_json"), [])
-        out["likely_causes"] = self._parse_json(out.pop("likely_causes_json"), [])
-        out["diagnostic"] = self._parse_json(out.pop("diagnostic_json"), {})
-        out["low_trust_flag"] = bool(out["low_trust_flag"])
+        out["weak_gates"] = self._parse_json(out.pop("weak_gates_json", "[]"), [])
+        out["strong_gates"] = self._parse_json(out.pop("strong_gates_json", "[]"), [])
+        out["high_collapse"] = self._parse_json(out.pop("high_collapse_json", "[]"), [])
+        out["anti_gaming_flags"] = self._parse_json(out.pop("anti_gaming_flags_json", "[]"), [])
+        out["likely_causes"] = self._parse_json(out.pop("likely_causes_json", "[]"), [])
+        out["diagnostic"] = self._parse_json(out.pop("diagnostic_json", "{}"), {})
+        out["low_trust_flag"] = bool(out.get("low_trust_flag"))
+        out["trust_adjustment"] = round(float(out.get("trust_adjustment") or 0.0), 4)
+        base = out.get("base_trust_score")
+        if base is None:
+            base = float(out.get("trust_score") or 0.0) - out["trust_adjustment"]
+        out["base_trust_score"] = round(float(base), 4)
+        out["trust_score"] = round(float(out.get("trust_score") or 0.0), 4)
+        out["effective_trust_score"] = out["trust_score"]
+        if out["anti_gaming_flags"] and "anti_gaming_review_required" not in out["likely_causes"]:
+            out["likely_causes"] = sorted(set(out["likely_causes"] + ["anti_gaming_review_required"]))
         return out
 
     def _fetch_trust_by_event(self, signal_event_id: str) -> Optional[Dict[str, Any]]:
@@ -564,8 +708,15 @@ class ConvergenceStore:
                 "idempotent_replay": bool(signal.get("_idempotent_replay", True)),
             }
 
+        anti_gaming_flags = self._detect_anti_gaming_flags(signal)
+        default_adjustment = self._default_trust_adjustment(anti_gaming_flags)
         identity = self.latest_identity(agent_address)
-        gradient = self._derive_gradient(signal=signal, identity=identity)
+        gradient = self._derive_gradient(
+            signal=signal,
+            identity=identity,
+            anti_gaming_flags=anti_gaming_flags,
+            trust_adjustment=default_adjustment,
+        )
 
         with self._conn() as conn:
             cursor = conn.cursor()
@@ -573,10 +724,12 @@ class ConvergenceStore:
                 """
                 INSERT OR IGNORE INTO trust_gradients (
                     signal_event_id, dgc_signal_id, agent_address, task_id, task_type, artifact_id,
-                    trust_score, low_trust_flag, gate_component, mission_component, collapse_component,
-                    self_alignment_component, affinity_match_component, weak_gates_json, strong_gates_json,
-                    high_collapse_json, likely_causes_json, diagnostic_json, audit_hash, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    base_trust_score, trust_score, trust_adjustment, low_trust_flag,
+                    gate_component, mission_component, collapse_component,
+                    self_alignment_component, affinity_match_component, anti_gaming_flags_json,
+                    weak_gates_json, strong_gates_json, high_collapse_json,
+                    likely_causes_json, diagnostic_json, audit_hash, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     signal["event_id"],
@@ -585,13 +738,16 @@ class ConvergenceStore:
                     signal.get("task_id"),
                     signal.get("task_type"),
                     signal.get("artifact_id"),
+                    gradient["base_trust_score"],
                     gradient["trust_score"],
+                    gradient["trust_adjustment"],
                     int(gradient["low_trust_flag"]),
                     gradient["gate_component"],
                     gradient["mission_component"],
                     gradient["collapse_component"],
                     gradient["self_alignment_component"],
                     gradient["affinity_match_component"],
+                    json.dumps(gradient["anti_gaming_flags"]),
                     json.dumps(gradient["weak_gates"]),
                     json.dumps(gradient["strong_gates"]),
                     json.dumps(gradient["high_collapse"]),
@@ -690,6 +846,186 @@ class ConvergenceStore:
             out[str(decoded["agent_address"])] = decoded
         return out
 
+    def set_trust_adjustment(
+        self,
+        event_id: str,
+        reviewer_address: str,
+        trust_adjustment: float,
+        reason: str,
+    ) -> Dict[str, Any]:
+        adjustment = round(
+            _clamp(float(trust_adjustment), -self.MAX_TRUST_ADJUSTMENT_ABS, self.MAX_TRUST_ADJUSTMENT_ABS), 4
+        )
+        with self._conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM trust_gradients
+                WHERE signal_event_id = ?
+                LIMIT 1
+                """,
+                (event_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise ValueError("trust_event_not_found")
+            current = self._decode_trust_row(row)
+            base = float(current.get("base_trust_score") or 0.0)
+            effective = round(_clamp(base + adjustment), 4)
+            low_trust = int(effective < self.LOW_TRUST_THRESHOLD)
+
+            likely = list(current.get("likely_causes") or [])
+            if adjustment < 0.0:
+                likely = sorted(set(likely + ["manual_clawback"]))
+            else:
+                likely = [x for x in likely if x != "manual_clawback"]
+
+            diagnostic = dict(current.get("diagnostic") or {})
+            diagnostic["base_trust_score"] = base
+            diagnostic["trust_adjustment"] = adjustment
+            diagnostic["effective_trust_score"] = effective
+            diagnostic["reviewer_address"] = reviewer_address
+            diagnostic["adjustment_reason"] = reason
+
+            cursor.execute(
+                """
+                UPDATE trust_gradients
+                SET trust_adjustment = ?,
+                    trust_score = ?,
+                    low_trust_flag = ?,
+                    likely_causes_json = ?,
+                    diagnostic_json = ?,
+                    adjustment_reviewer = ?,
+                    adjustment_reason = ?,
+                    adjusted_at = ?
+                WHERE signal_event_id = ?
+                """,
+                (
+                    adjustment,
+                    effective,
+                    low_trust,
+                    json.dumps(likely),
+                    json.dumps(diagnostic),
+                    reviewer_address,
+                    reason,
+                    _utc_now(),
+                    event_id,
+                ),
+            )
+
+        updated = self._fetch_trust_by_event(event_id)
+        if not updated:
+            raise ValueError("trust_event_not_found")
+        return updated
+
+    def apply_clawback(
+        self,
+        event_id: str,
+        reviewer_address: str,
+        penalty: float,
+        reason: str,
+    ) -> Dict[str, Any]:
+        existing = self._fetch_trust_by_event(event_id)
+        if not existing:
+            raise ValueError("trust_event_not_found")
+        current_adjustment = float(existing.get("trust_adjustment") or 0.0)
+        target_adjustment = current_adjustment - abs(float(penalty))
+        return self.set_trust_adjustment(
+            event_id=event_id,
+            reviewer_address=reviewer_address,
+            trust_adjustment=target_adjustment,
+            reason=reason,
+        )
+
+    def anti_gaming_report(self, limit: int = ANTI_GAMING_SCAN_LIMIT) -> Dict[str, Any]:
+        with self._conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT *
+                FROM trust_gradients
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            rows = [self._decode_trust_row(row) for row in cursor.fetchall()]
+
+            cursor.execute(
+                """
+                SELECT source_alias, COUNT(*) AS c, COUNT(DISTINCT agent_address) AS a
+                FROM dgc_signals
+                WHERE source_alias IS NOT NULL AND TRIM(source_alias) != ''
+                GROUP BY source_alias
+                HAVING a >= 3
+                ORDER BY a DESC, c DESC
+                LIMIT 50
+                """
+            )
+            alias_clusters = [
+                {
+                    "source_alias": row["source_alias"],
+                    "signal_count": int(row["c"]),
+                    "agent_count": int(row["a"]),
+                }
+                for row in cursor.fetchall()
+            ]
+
+            cursor.execute(
+                """
+                SELECT artifact_id, COUNT(*) AS c, COUNT(DISTINCT agent_address) AS a
+                FROM dgc_signals
+                WHERE artifact_id IS NOT NULL AND TRIM(artifact_id) != ''
+                GROUP BY artifact_id
+                HAVING a >= 2
+                ORDER BY a DESC, c DESC
+                LIMIT 50
+                """
+            )
+            artifact_replays = [
+                {
+                    "artifact_id": row["artifact_id"],
+                    "signal_count": int(row["c"]),
+                    "agent_count": int(row["a"]),
+                }
+                for row in cursor.fetchall()
+            ]
+
+        suspicious_events: List[Dict[str, Any]] = []
+        flag_counts: Dict[str, int] = {}
+        for row in rows:
+            flags = list(row.get("anti_gaming_flags") or [])
+            if flags or float(row.get("trust_adjustment") or 0.0) < 0.0:
+                suspicious_events.append(
+                    {
+                        "signal_event_id": row["signal_event_id"],
+                        "agent_address": row["agent_address"],
+                        "trust_score": row["trust_score"],
+                        "base_trust_score": row.get("base_trust_score"),
+                        "trust_adjustment": row.get("trust_adjustment", 0.0),
+                        "anti_gaming_flags": flags,
+                        "likely_causes": row.get("likely_causes", []),
+                        "updated_at": row.get("created_at"),
+                    }
+                )
+            for flag in flags:
+                flag_counts[flag] = flag_counts.get(flag, 0) + 1
+
+        summary = {
+            "scanned_events": len(rows),
+            "suspicious_count": len(suspicious_events),
+            "flag_counts": flag_counts,
+            "collusion_alias_cluster_count": len(alias_clusters),
+            "cross_agent_artifact_replay_count": len(artifact_replays),
+            "generated_at": _utc_now(),
+        }
+        return {
+            "summary": summary,
+            "suspicious_events": suspicious_events[:100],
+            "collusion_alias_clusters": alias_clusters,
+            "cross_agent_artifact_replays": artifact_replays,
+        }
+
     def landscape(self, limit: int = 200) -> Dict[str, Any]:
         with self._conn() as conn:
             cursor = conn.cursor()
@@ -727,15 +1063,8 @@ class ConvergenceStore:
             identities = {row["agent_address"]: dict(row) for row in cursor.fetchall()}
 
         nodes: List[Dict[str, Any]] = []
-        for row in trust_rows:
-            weak_gates = self._parse_json(row.pop("weak_gates_json"), [])
-            strong_gates = self._parse_json(row.pop("strong_gates_json"), [])
-            likely_causes = self._parse_json(row.pop("likely_causes_json"), [])
-            diagnostic = self._parse_json(row.pop("diagnostic_json"), {})
-            row.pop("high_collapse_json", None)
-            row.pop("likely_causes_json", None)
-            row.pop("diagnostic_json", None)
-
+        for raw in trust_rows:
+            row = self._decode_trust_row(raw)
             identity = identities.get(row["agent_address"]) or {}
             affinity = self._parse_json(identity.get("task_affinity_json"), [])
 
@@ -759,10 +1088,13 @@ class ConvergenceStore:
                     "x": round(trust, 4),
                     "y": round(y, 4),
                     "low_trust_flag": bool(row["low_trust_flag"]),
-                    "strong_gates": strong_gates[:5],
-                    "weak_gates": weak_gates[:5],
-                    "likely_causes": likely_causes,
-                    "diagnostic": diagnostic,
+                    "base_trust_score": row.get("base_trust_score", trust),
+                    "trust_adjustment": row.get("trust_adjustment", 0.0),
+                    "anti_gaming_flags": list(row.get("anti_gaming_flags", [])),
+                    "strong_gates": list(row.get("strong_gates", []))[:5],
+                    "weak_gates": list(row.get("weak_gates", []))[:5],
+                    "likely_causes": list(row.get("likely_causes", [])),
+                    "diagnostic": dict(row.get("diagnostic", {})),
                     "color": color,
                     "updated_at": row["created_at"],
                 }

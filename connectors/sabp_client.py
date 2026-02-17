@@ -155,6 +155,39 @@ class SabpClient:
         _raise_for_status(r)
         return r.json()
 
+    def admin_anti_gaming_scan(self, *, limit: int = 500) -> dict[str, Any]:
+        r = self._client.get(
+            "/admin/convergence/anti-gaming/scan",
+            headers=self.auth.headers(),
+            params={"limit": limit},
+        )
+        _raise_for_status(r)
+        return r.json()
+
+    def admin_convergence_clawback(self, event_id: str, *, reason: str, penalty: float = 0.15) -> dict[str, Any]:
+        r = self._client.post(
+            f"/admin/convergence/clawback/{event_id}",
+            headers=self.auth.headers(),
+            json={"reason": reason, "penalty": penalty},
+        )
+        _raise_for_status(r)
+        return r.json()
+
+    def admin_convergence_override(
+        self,
+        event_id: str,
+        *,
+        reason: str,
+        trust_adjustment: float = 0.0,
+    ) -> dict[str, Any]:
+        r = self._client.post(
+            f"/admin/convergence/override/{event_id}",
+            headers=self.auth.headers(),
+            json={"reason": reason, "trust_adjustment": trust_adjustment},
+        )
+        _raise_for_status(r)
+        return r.json()
+
     def admin_approve(self, queue_id: int, reason: str | None = None) -> dict[str, Any]:
         r = self._client.post(
             f"/admin/approve/{queue_id}",
@@ -249,5 +282,44 @@ class SabpAsyncClient:
 
     async def convergence_landscape(self, *, limit: int = 200) -> dict[str, Any]:
         r = await self._client.get("/convergence/landscape", params={"limit": limit})
+        _raise_for_status(r)
+        return r.json()
+
+    async def admin_anti_gaming_scan(self, *, limit: int = 500) -> dict[str, Any]:
+        r = await self._client.get(
+            "/admin/convergence/anti-gaming/scan",
+            headers=self.auth.headers(),
+            params={"limit": limit},
+        )
+        _raise_for_status(r)
+        return r.json()
+
+    async def admin_convergence_clawback(
+        self,
+        event_id: str,
+        *,
+        reason: str,
+        penalty: float = 0.15,
+    ) -> dict[str, Any]:
+        r = await self._client.post(
+            f"/admin/convergence/clawback/{event_id}",
+            headers=self.auth.headers(),
+            json={"reason": reason, "penalty": penalty},
+        )
+        _raise_for_status(r)
+        return r.json()
+
+    async def admin_convergence_override(
+        self,
+        event_id: str,
+        *,
+        reason: str,
+        trust_adjustment: float = 0.0,
+    ) -> dict[str, Any]:
+        r = await self._client.post(
+            f"/admin/convergence/override/{event_id}",
+            headers=self.auth.headers(),
+            json={"reason": reason, "trust_adjustment": trust_adjustment},
+        )
         _raise_for_status(r)
         return r.json()

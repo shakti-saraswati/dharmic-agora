@@ -480,6 +480,52 @@ def test_identity_and_signal_metadata_bounds(fresh_api):
     asyncio.run(run())
 
 
+def test_replay_like_signals_surface_anti_gaming_flags(fresh_api):
+    async def run() -> None:
+        transport = httpx.ASGITransport(app=fresh_api.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            token_resp = await client.post("/auth/token", json={"name": "diag-anti", "telos": "evaluation"})
+            assert token_resp.status_code == 200
+            headers = {
+                "Authorization": f"Bearer {token_resp.json()['token']}",
+                "X-SAB-DGC-Secret": "test-shared-secret",
+            }
+            payload_a = {
+                "event_id": "evt-anti-1",
+                "schema_version": "dgc.v1",
+                "timestamp": "2026-02-16T17:05:00Z",
+                "task_type": "evaluation",
+                "artifact_id": "artifact-shared-anti",
+                "source_alias": "agni-dgc",
+                "gate_scores": {"satya": 0.86, "substance": 0.82},
+                "collapse_dimensions": {"ritual_ack": 0.2},
+                "mission_relevance": 0.84,
+            }
+            first = await client.post("/signals/dgc", headers=headers, json=payload_a)
+            assert first.status_code == 200
+            assert first.json()["anti_gaming_flags"] == []
+
+            payload_b = {
+                **payload_a,
+                "event_id": "evt-anti-2",
+                "timestamp": "2026-02-16T17:06:00Z",
+            }
+            second = await client.post("/signals/dgc", headers=headers, json=payload_b)
+            assert second.status_code == 200
+            body = second.json()
+            assert "replay_laundering_risk" in body["anti_gaming_flags"]
+            assert body["trust_adjustment"] < 0.0
+            assert body["trust_score"] <= body["base_trust_score"]
+
+            hist = await client.get(f"/convergence/trust/{token_resp.json()['address']}", headers=headers)
+            assert hist.status_code == 200
+            latest = hist.json()["latest"]
+            assert "replay_laundering_risk" in latest["anti_gaming_flags"]
+            assert latest["trust_adjustment"] < 0.0
+
+    asyncio.run(run())
+
+
 def test_convergence_store_defense_in_depth_bounds(tmp_path: Path):
     from agora.convergence import ConvergenceStore
 
@@ -527,3 +573,60 @@ def test_convergence_store_defense_in_depth_bounds(tmp_path: Path):
             },
             payload_hash="hash-store-bounds-1",
         )
+
+
+def test_convergence_store_anti_gaming_report_and_adjustment_flow(tmp_path: Path):
+    from agora.convergence import ConvergenceStore
+
+    store = ConvergenceStore(tmp_path / "store_anti.db")
+    store.register_identity(
+        "agent_direct_2",
+        {
+            "base_model": "test-model",
+            "alias": "DIRECT2",
+            "timestamp": "2026-02-16T17:20:00Z",
+            "perceived_role": "tester",
+            "self_grade": 0.7,
+            "context_hash": "ctx_direct_anti",
+            "task_affinity": ["evaluation"],
+            "metadata": {"source": "unit"},
+        },
+    )
+
+    payload_1 = {
+        "event_id": "evt-store-anti-1",
+        "timestamp": "2026-02-16T17:21:00Z",
+        "task_type": "evaluation",
+        "artifact_id": "artifact-store-anti",
+        "source_alias": "agni-dgc",
+        "gate_scores": {"satya": 0.88, "substance": 0.84},
+        "collapse_dimensions": {"ritual_ack": 0.2},
+        "mission_relevance": 0.86,
+    }
+    store.ingest_and_score("agent_direct_2", payload_1, payload_hash="hash-store-anti-1")
+
+    payload_2 = {**payload_1, "event_id": "evt-store-anti-2", "timestamp": "2026-02-16T17:22:00Z"}
+    out = store.ingest_and_score("agent_direct_2", payload_2, payload_hash="hash-store-anti-2")
+    assert "replay_laundering_risk" in out["gradient"]["anti_gaming_flags"]
+
+    report = store.anti_gaming_report(limit=50)
+    assert report["summary"]["suspicious_count"] >= 1
+    assert any(
+        e["signal_event_id"] == "evt-store-anti-2" for e in report["suspicious_events"]
+    )
+
+    clawed = store.apply_clawback(
+        event_id="evt-store-anti-2",
+        reviewer_address="admin_1",
+        penalty=0.20,
+        reason="manual review",
+    )
+    assert clawed["trust_adjustment"] <= -0.20
+
+    restored = store.set_trust_adjustment(
+        event_id="evt-store-anti-2",
+        reviewer_address="admin_1",
+        trust_adjustment=0.0,
+        reason="override accepted",
+    )
+    assert restored["trust_adjustment"] == 0.0

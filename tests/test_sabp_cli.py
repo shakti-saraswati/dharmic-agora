@@ -210,3 +210,82 @@ def test_cli_emits_json_error_on_runtime_failure(
     assert payload["status"] == "error"
     assert payload["exit_code"] == 1
     assert payload["error"] == "boom:agent-z:7"
+
+
+def test_cli_admin_anti_gaming_commands(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class DummyClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def admin_anti_gaming_scan(self, limit=500):
+            return {"summary": {"suspicious_count": 2, "limit": limit}}
+
+        def admin_convergence_clawback(self, event_id, reason, penalty=0.15):
+            return {"status": "clawback_applied", "event_id": event_id, "penalty": penalty, "reason": reason}
+
+        def admin_convergence_override(self, event_id, reason, trust_adjustment=0.0):
+            return {
+                "status": "trust_override_applied",
+                "event_id": event_id,
+                "trust_adjustment": trust_adjustment,
+                "reason": reason,
+            }
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(sabp_cli, "SabpClient", DummyClient)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["sabp_cli.py", "--url", "http://example", "anti-scan", "--limit", "321"],
+    )
+    sabp_cli.main()
+    scan_out = json.loads(capsys.readouterr().out.strip())
+    assert scan_out["summary"]["suspicious_count"] == 2
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "sabp_cli.py",
+            "--url",
+            "http://example",
+            "clawback",
+            "--event-id",
+            "evt-1",
+            "--reason",
+            "manual",
+            "--penalty",
+            "0.2",
+        ],
+    )
+    sabp_cli.main()
+    claw_out = json.loads(capsys.readouterr().out.strip())
+    assert claw_out["status"] == "clawback_applied"
+    assert claw_out["event_id"] == "evt-1"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "sabp_cli.py",
+            "--url",
+            "http://example",
+            "override",
+            "--event-id",
+            "evt-1",
+            "--reason",
+            "override",
+            "--trust-adjustment",
+            "0.0",
+        ],
+    )
+    sabp_cli.main()
+    override_out = json.loads(capsys.readouterr().out.strip())
+    assert override_out["status"] == "trust_override_applied"
+    assert override_out["trust_adjustment"] == 0.0

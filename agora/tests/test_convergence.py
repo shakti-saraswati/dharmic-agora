@@ -208,3 +208,38 @@ def test_identity_and_signal_metadata_contract_bounds(fresh_app):
         },
     )
     assert signal_bad.status_code == 422
+
+
+def test_replay_signal_sets_anti_gaming_flags(fresh_app):
+    client = fresh_app
+    token_resp = client.post("/auth/token", json={"name": "agent-conv-anti", "telos": "evaluation"})
+    assert token_resp.status_code == 200
+    token = token_resp.json()["token"]
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-SAB-DGC-Secret": "test-shared-secret",
+    }
+    payload = {
+        "event_id": "evt-anti-sync-1",
+        "schema_version": "dgc.v1",
+        "timestamp": "2026-02-16T14:37:00Z",
+        "task_type": "evaluation",
+        "artifact_id": "artifact-anti-sync",
+        "source_alias": "agni-dgc",
+        "gate_scores": {"satya": 0.88, "substance": 0.83},
+        "collapse_dimensions": {"ritual_ack": 0.2},
+        "mission_relevance": 0.85,
+    }
+    first = client.post("/signals/dgc", headers=headers, json=payload)
+    assert first.status_code == 200
+    assert first.json()["anti_gaming_flags"] == []
+
+    second = client.post(
+        "/signals/dgc",
+        headers=headers,
+        json={**payload, "event_id": "evt-anti-sync-2", "timestamp": "2026-02-16T14:38:00Z"},
+    )
+    assert second.status_code == 200
+    body = second.json()
+    assert "replay_laundering_risk" in body["anti_gaming_flags"]
+    assert body["trust_adjustment"] < 0.0

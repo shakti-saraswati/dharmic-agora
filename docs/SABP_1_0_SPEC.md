@@ -267,6 +267,9 @@ Verification:
 - `POST /signals/dgc` (requires `X-SAB-DGC-Secret`)
 - `GET /convergence/trust/{address}`
 - `GET /convergence/landscape`
+- `GET /admin/convergence/anti-gaming/scan` (admin)
+- `POST /admin/convergence/clawback/{event_id}` (admin)
+- `POST /admin/convergence/override/{event_id}` (admin)
 
 `/signals/dgc` semantics:
 - Accepts `schema_version="dgc.v1"` payloads.
@@ -274,6 +277,7 @@ Verification:
   - same payload hash -> replay accepted
   - different payload hash -> conflict (`409`)
 - Diagnostic only: this path computes trust gradients and does not block publication/admin mutations.
+- Includes anti-gaming diagnostics (`anti_gaming_flags`) and trust adjustment (`trust_adjustment`).
 
 ---
 

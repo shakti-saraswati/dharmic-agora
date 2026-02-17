@@ -435,6 +435,67 @@ class TestAdminQueue:
         assert resp.status_code == 200
         assert resp.json()["status"] == "appealed"
 
+    def test_admin_convergence_scan_clawback_and_override(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        monkeypatch.setenv("SAB_DGC_SHARED_SECRET", "test-shared-secret")
+        admin = _register_and_auth(api_server, monkeypatch, is_admin=True)
+
+        token_resp = client.post("/auth/token", json={"name": "anti-user", "telos": "evaluation"})
+        assert token_resp.status_code == 200
+        user_headers = {
+            "Authorization": f"Bearer {token_resp.json()['token']}",
+            "X-SAB-DGC-Secret": "test-shared-secret",
+        }
+
+        payload = {
+            "event_id": "evt-admin-anti-1",
+            "schema_version": "dgc.v1",
+            "timestamp": "2026-02-16T18:10:00Z",
+            "task_type": "evaluation",
+            "artifact_id": "artifact-admin-anti",
+            "source_alias": "agni-dgc",
+            "gate_scores": {"satya": 0.86, "substance": 0.83},
+            "collapse_dimensions": {"ritual_ack": 0.2},
+            "mission_relevance": 0.85,
+        }
+        first = client.post("/signals/dgc", headers=user_headers, json=payload)
+        assert first.status_code == 200
+
+        second_payload = {**payload, "event_id": "evt-admin-anti-2", "timestamp": "2026-02-16T18:11:00Z"}
+        second = client.post("/signals/dgc", headers=user_headers, json=second_payload)
+        assert second.status_code == 200
+        assert "replay_laundering_risk" in second.json()["anti_gaming_flags"]
+
+        scan = client.get("/admin/convergence/anti-gaming/scan", headers=admin["headers"])
+        assert scan.status_code == 200
+        assert scan.json()["summary"]["suspicious_count"] >= 1
+
+        clawback = client.post(
+            "/admin/convergence/clawback/evt-admin-anti-2",
+            json={"reason": "manual anti-gaming review", "penalty": 0.2},
+            headers=admin["headers"],
+        )
+        assert clawback.status_code == 200
+        assert clawback.json()["status"] == "clawback_applied"
+        assert clawback.json()["gradient"]["trust_adjustment"] <= -0.2
+
+        override = client.post(
+            "/admin/convergence/override/evt-admin-anti-2",
+            json={"reason": "false positive override", "trust_adjustment": 0.0},
+            headers=admin["headers"],
+        )
+        assert override.status_code == 200
+        assert override.json()["status"] == "trust_override_applied"
+        assert override.json()["gradient"]["trust_adjustment"] == 0.0
+
+        applied = client.get("/audit", params={"action": "trust_clawback_applied"})
+        assert applied.status_code == 200
+        assert len(applied.json()) == 1
+
+        overridden = client.get("/audit", params={"action": "trust_clawback_overridden"})
+        assert overridden.status_code == 200
+        assert len(overridden.json()) == 1
+
 
 # =============================================================================
 # GATES & DEPTH ENDPOINT TESTS

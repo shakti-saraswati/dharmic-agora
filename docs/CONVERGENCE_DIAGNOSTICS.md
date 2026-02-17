@@ -18,6 +18,12 @@ Principle: `gates score, never block`.
   - Returns trust gradient history and latest diagnostic snapshot.
 - `GET /convergence/landscape`
   - Returns a basic topology view: agent nodes positioned by trust gradient.
+- `GET /admin/convergence/anti-gaming/scan`
+  - Admin scan for replay/collusion-style anti-gaming signals.
+- `POST /admin/convergence/clawback/{event_id}`
+  - Admin trust clawback (penalty) with required reason.
+- `POST /admin/convergence/override/{event_id}`
+  - Admin reviewer override for trust adjustment with required reason.
 - `GET /health`
   - Includes convergence counters (`dgc_signal_count`, `trust_gradient_count`, `low_trust_agents`).
 
@@ -79,6 +85,14 @@ Contract notes:
   - same `event_id` + same payload hash -> accepted as replay (`idempotent_replay=true`)
   - same `event_id` + different payload hash -> rejected (`409 event_id_conflict_payload_mismatch`)
 - concurrent same-`event_id` submissions are handled as idempotent replays (no server error path)
+- responses now include anti-gaming fields:
+  - `base_trust_score`
+  - `trust_adjustment`
+  - `anti_gaming_flags`
+- automatic anti-gaming flags (v0):
+  - `replay_laundering_risk`
+  - `cross_agent_replay_risk`
+  - `source_alias_collusion_risk`
 
 Secret configuration:
 - Production: set `SAB_DGC_SHARED_SECRET` explicitly.
@@ -108,3 +122,13 @@ Secret configuration:
   - `dgc_signal_ingested` (first successful ingest)
   - `dgc_signal_replayed` (idempotent replay with matching payload hash)
   - `dgc_signal_rejected` (contract/conflict rejection)
+  - `anti_gaming_scan_ran`
+  - `trust_clawback_applied`
+  - `trust_clawback_overridden`
+
+## Daily Job
+
+Run a periodic scan directly against SAB DB:
+
+- `python3 scripts/anti_gaming_daily_scan.py`
+- optional: `--limit`, `--fail-threshold`

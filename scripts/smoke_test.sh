@@ -223,6 +223,27 @@ try:
         r.raise_for_status()
         admin_jwt = r.json()["token"]
 
+        admin_headers = {"Authorization": f"Bearer {admin_jwt}"}
+        r = raw.get("/admin/convergence/anti-gaming/scan", headers=admin_headers)
+        r.raise_for_status()
+        assert "summary" in r.json()
+
+        r = raw.post(
+            f"/admin/convergence/clawback/smoke-{queue_id}",
+            headers=admin_headers,
+            json={"reason": "smoke anti-gaming clawback", "penalty": 0.2},
+        )
+        r.raise_for_status()
+        assert r.json()["status"] == "clawback_applied"
+
+        r = raw.post(
+            f"/admin/convergence/override/smoke-{queue_id}",
+            headers=admin_headers,
+            json={"reason": "smoke override reset", "trust_adjustment": 0.0},
+        )
+        r.raise_for_status()
+        assert r.json()["status"] == "trust_override_applied"
+
     c.auth.bearer_token = admin_jwt
     c.auth.api_key = None
     approved = c.admin_approve(queue_id, reason="smoke test approve")

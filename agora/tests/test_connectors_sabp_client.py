@@ -143,3 +143,31 @@ def test_async_client_surfaces_text_error_body() -> None:
             assert "GET /health -> 500: upstream meltdown" in str(exc.value)
 
     asyncio.run(run())
+
+
+def test_sync_client_admin_convergence_methods() -> None:
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.url.path == "/admin/convergence/anti-gaming/scan":
+            return httpx.Response(status_code=200, json={"summary": {"suspicious_count": 1}}, request=request)
+        if request.url.path.endswith("/clawback/evt-1"):
+            return httpx.Response(status_code=200, json={"status": "clawback_applied"}, request=request)
+        if request.url.path.endswith("/override/evt-1"):
+            return httpx.Response(status_code=200, json={"status": "trust_override_applied"}, request=request)
+        return httpx.Response(status_code=404, json={"detail": "not found"}, request=request)
+
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://test") as raw:
+        c = SabpClient("http://test", client=raw)
+        scan = c.admin_anti_gaming_scan(limit=100)
+        assert scan["summary"]["suspicious_count"] == 1
+        claw = c.admin_convergence_clawback("evt-1", reason="manual", penalty=0.2)
+        assert claw["status"] == "clawback_applied"
+        override = c.admin_convergence_override("evt-1", reason="override", trust_adjustment=0.0)
+        assert override["status"] == "trust_override_applied"
+
+    assert ("GET", "/admin/convergence/anti-gaming/scan") in calls
+    assert ("POST", "/admin/convergence/clawback/evt-1") in calls
+    assert ("POST", "/admin/convergence/override/evt-1") in calls

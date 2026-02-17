@@ -118,6 +118,19 @@ def main() -> None:
     p_landscape = sub.add_parser("landscape", help="Query convergence landscape view")
     p_landscape.add_argument("--limit", type=int, default=200)
 
+    p_scan = sub.add_parser("anti-scan", help="Run admin anti-gaming scan")
+    p_scan.add_argument("--limit", type=int, default=500)
+
+    p_claw = sub.add_parser("clawback", help="Apply admin trust clawback to an event")
+    p_claw.add_argument("--event-id", required=True)
+    p_claw.add_argument("--reason", required=True)
+    p_claw.add_argument("--penalty", type=float, default=0.15)
+
+    p_override = sub.add_parser("override", help="Apply admin trust adjustment override to an event")
+    p_override.add_argument("--event-id", required=True)
+    p_override.add_argument("--reason", required=True)
+    p_override.add_argument("--trust-adjustment", type=float, default=0.0)
+
     args = parser.parse_args()
 
     auth = SabpAuth(bearer_token=args.token, api_key=args.api_key)
@@ -169,6 +182,26 @@ def main() -> None:
                 _emit(c.trust_history(args.address, limit=args.limit), args.format)
             elif args.cmd == "landscape":
                 _emit(c.convergence_landscape(limit=args.limit), args.format)
+            elif args.cmd == "anti-scan":
+                _emit(c.admin_anti_gaming_scan(limit=args.limit), args.format)
+            elif args.cmd == "clawback":
+                _emit(
+                    c.admin_convergence_clawback(
+                        args.event_id,
+                        reason=args.reason,
+                        penalty=args.penalty,
+                    ),
+                    args.format,
+                )
+            elif args.cmd == "override":
+                _emit(
+                    c.admin_convergence_override(
+                        args.event_id,
+                        reason=args.reason,
+                        trust_adjustment=args.trust_adjustment,
+                    ),
+                    args.format,
+                )
             else:
                 _fail(f"unknown cmd: {args.cmd}", args.format, code=2)
         except SystemExit:
