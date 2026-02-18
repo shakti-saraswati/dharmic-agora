@@ -43,6 +43,7 @@ from agora.models import ModerationStatus
 from agora.kernel import kernel_contract, evaluate_kernel
 from agora.observability import configure_observability, instrument_app
 from agora import repository
+from agora.federation import federation_router
 
 # =============================================================================
 # SETUP
@@ -344,6 +345,9 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 instrument_app(app)
+
+# Include SAB Federation router
+app.include_router(federation_router)
 
 
 @app.middleware("http")
