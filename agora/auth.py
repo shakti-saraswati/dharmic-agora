@@ -641,22 +641,29 @@ class AgentAuth:
                 "expires_at": expires_at.isoformat(), "auth_method": "token"}
 
     def verify_simple_token(self, token: str) -> Optional[dict]:
-        """Verify a simple token. Returns agent dict or None."""
+        """Verify a simple token. Returns agent dict or None.
+        
+        Uses constant-time comparison to prevent timing attacks.
+        """
         if not token.startswith("sab_t_"):
             return None
+        
         conn = sqlite3.connect(self.db_path)
         try:
-            row = conn.execute(
-                "SELECT address, name, telos, expires_at FROM simple_tokens WHERE token=?",
-                (token,),
-            ).fetchone()
-            if not row:
-                return None
-            address, name, telos, expires_at = row
-            if datetime.fromisoformat(expires_at) < datetime.now(timezone.utc):
-                return None
-            return {"address": address, "name": name, "telos": telos,
-                    "reputation": 0.0, "auth_method": "token"}
+            # Fetch all non-expired tokens to prevent timing attacks
+            # that could reveal token existence through query timing
+            now = datetime.now(timezone.utc).isoformat()
+            rows = conn.execute(
+                "SELECT token, address, name, telos, expires_at FROM simple_tokens WHERE expires_at > ?",
+                (now,),
+            ).fetchall()
+            
+            # Constant-time comparison across all valid tokens
+            for stored_token, address, name, telos, expires_at in rows:
+                if hmac.compare_digest(stored_token, token):
+                    return {"address": address, "name": name, "telos": telos,
+                            "reputation": 0.0, "auth_method": "token"}
+            return None
         finally:
             conn.close()
 
@@ -736,8 +743,8 @@ if __name__ == "__main__":
     try:
         address = auth.register("test-agent", public_key, telos="seeking truth")
         print(f"   Address: {address}")
-    except ValueError as e:
-        print(f"   Already registered, looking up...")
+    except ValueError:
+        print("   Already registered, looking up...")
         address = hashlib.sha256(public_key).hexdigest()[:16]
 
     # Auth flow
@@ -752,7 +759,7 @@ if __name__ == "__main__":
     print("\n5. Verifying signature...")
     result = auth.verify_challenge(address, signature)
     if result.success:
-        print(f"   SUCCESS!")
+        print("   SUCCESS!")
         print(f"   JWT Token: {result.token[:50]}...")
         print(f"   Expires: {result.expires_at}")
         print(f"   Agent: {result.agent.name} (rep: {result.agent.reputation})")

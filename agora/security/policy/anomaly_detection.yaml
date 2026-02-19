@@ -1,0 +1,4 @@
+thresholds:
+  max_consecutive_failures: 3
+  max_daily_rejections: 5
+  max_systemic_flags: 2

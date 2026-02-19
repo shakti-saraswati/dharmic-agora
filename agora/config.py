@@ -8,8 +8,10 @@ import os
 from pathlib import Path
 from typing import Set
 
+from .db_config import DB_PATHS
+
 # --- Database ---
-DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "agora.db"
+DEFAULT_DB_PATH = Path(DB_PATHS["sabp"])
 SAB_VERSION = os.environ.get("SAB_VERSION", "0.3.1")
 
 

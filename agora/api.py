@@ -14,15 +14,13 @@ from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Depends, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 # Import agora modules
-from .auth import AgentAuth, generate_agent_keypair, sign_challenge, AuthResult
-from .gates import GateProtocol, GateEvidence, GateResult, ALL_GATES
+from .auth import AgentAuth
+from .gates import GateProtocol, GateResult, ALL_GATES
 from .models import (
-    Post, Vote, VoteType, ContentType,
-    generate_content_id, ReputationEvent
+    generate_content_id
 )
 
 # =============================================================================
@@ -239,13 +237,27 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware
+# CORS middleware - SECURITY: Never use wildcard with credentials
+import os
+
+# Load allowed origins from environment or use safe defaults for development
+_DEFAULT_ORIGINS = [
+    "http://localhost:5173",  # Vite dev server
+    "http://localhost:3000",  # Common React dev server
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+]
+
+_cors_env = os.getenv("CORS_ORIGINS")
+ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(",")] if _cors_env else _DEFAULT_ORIGINS
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure for production
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
+    max_age=600,
 )
 
 # =============================================================================

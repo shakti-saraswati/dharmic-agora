@@ -119,8 +119,21 @@ class VenomVault:
         if not CRYPTO_AVAILABLE:
             return None
         
-        secret = os.environ.get("NAGA_SECRET", "dharmic_default_key_change_me")
-        salt = b"naga_relay_salt_v1"
+        secret = os.environ.get("NAGA_SECRET")
+        if not secret:
+            raise RuntimeError(
+                "CRITICAL: NAGA_SECRET environment variable must be set. "
+                "Generate with: python -c 'import secrets; print(secrets.token_hex(32))'"
+            )
+        
+        # Use per-installation salt stored securely, not hardcoded
+        salt_path = self.naga.base_path / ".salt"
+        if salt_path.exists():
+            salt = salt_path.read_bytes()
+        else:
+            salt = os.urandom(32)
+            salt_path.write_bytes(salt)
+            salt_path.chmod(0o600)
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
@@ -218,9 +231,11 @@ class StrikeHead:
     
     def _sign(self, msg: DharmicMessage) -> str:
         """Sign message with HMAC."""
-        secret = os.environ.get("NAGA_SECRET", "dharmic_default_key").encode()
+        secret = os.environ.get("NAGA_SECRET")
+        if not secret:
+            raise RuntimeError("CRITICAL: NAGA_SECRET environment variable must be set")
         payload = json.dumps(msg.payload, sort_keys=True)
-        return hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+        return hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
     
     def _deliver(self, msg: DharmicMessage, target: str) -> bool:
         """Deliver to file-based target."""

@@ -24,6 +24,11 @@ echo ""
 echo "Running tests..."
 python3 -m pytest agora/tests/ -v --tb=short
 
+# Validate naming registry (prevents drift)
+echo ""
+echo "Validating NAME_REGISTRY..."
+python3 scripts/check_name_registry.py
+
 # Run integration test
 echo ""
 echo "Running integration test..."

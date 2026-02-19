@@ -27,9 +27,34 @@ jobs:
         pip install -r requirements.txt
         pip install pytest pytest-asyncio pytest-cov
 
+    - name: Validate NAME_REGISTRY
+      run: |
+        python3 scripts/check_name_registry.py
+
+    - name: Shadow loop runtime check
+      run: |
+        python3 scripts/orthogonal_safety_loop.py --output-dir /tmp/shadow_loop_ci
+        python3 - <<'PY'
+        import json
+        from pathlib import Path
+
+        summary = json.loads(Path("/tmp/shadow_loop_ci/run_summary.json").read_text())
+        required = {"status", "alert_count", "high_alert_count", "trend"}
+        missing = sorted(required - set(summary))
+        if missing:
+            raise SystemExit(f"Missing keys in run_summary.json: {missing}")
+        print(f"shadow_loop_status={summary['status']}")
+        PY
+
     - name: Run tests
       run: |
+        pytest tests/ -v
         pytest agora/tests/ -v --cov=agora --cov-report=xml
+
+    - name: Run smoke test
+      if: matrix.python-version == '3.11'
+      run: |
+        bash scripts/smoke_test.sh
 
     - name: Upload coverage
       uses: codecov/codecov-action@v3

@@ -1,0 +1,1 @@
+"""SETU Warehouse agent package."""

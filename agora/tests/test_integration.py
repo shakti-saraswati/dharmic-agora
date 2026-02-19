@@ -4,6 +4,7 @@ SAB Integration Tests — Full API flow coverage.
 Tests the complete lifecycle: register → auth → post → moderate → vote → depth.
 """
 import importlib
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,8 +38,21 @@ pytestmark = pytest.mark.skipif(not NACL_AVAILABLE, reason="PyNaCl not available
 def fresh_app(tmp_path, monkeypatch):
     """Fresh API server with isolated database."""
     db_path = tmp_path / "sab_test.db"
+    shadow_summary = tmp_path / "shadow_loop" / "run_summary.json"
+    shadow_summary.parent.mkdir(parents=True, exist_ok=True)
+    shadow_summary.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-02-16T00:00:00+00:00",
+                "status": "stable",
+                "alert_count": 0,
+                "high_alert_count": 0,
+            }
+        )
+    )
     monkeypatch.setenv("SAB_DB_PATH", str(db_path))
     monkeypatch.setenv("SAB_ADMIN_ALLOWLIST", "")
+    monkeypatch.setenv("SAB_SHADOW_SUMMARY_PATH", str(shadow_summary))
 
     # Force reimport to pick up new DB_PATH
     for mod_name in list(sys.modules):
@@ -108,6 +122,14 @@ class TestAuthFlow:
         assert data["status"] == "healthy"
         from agora.config import SAB_VERSION
         assert data["version"] == SAB_VERSION
+        assert "convergence" in data
+        assert set(data["convergence"].keys()) == {
+            "dgc_signal_count",
+            "trust_gradient_count",
+            "low_trust_agents",
+            "outcome_witness_count",
+            "darwin_run_count",
+        }
 
     def test_root_endpoint(self, fresh_app):
         client, _, _ = fresh_app
@@ -119,6 +141,20 @@ class TestAuthFlow:
         client, _, _ = fresh_app
         resp = client.post("/posts", json={"content": "test", "signature": "x", "signed_at": "x"})
         assert resp.status_code == 401
+
+    def test_cors_preflight_allows_dgc_secret_header(self, fresh_app):
+        client, _, _ = fresh_app
+        resp = client.options(
+            "/signals/dgc",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "Authorization,Content-Type,X-SAB-DGC-Secret",
+            },
+        )
+        assert resp.status_code == 200
+        allow_headers = resp.headers.get("access-control-allow-headers", "").lower()
+        assert "x-sab-dgc-secret" in allow_headers
 
 
 # =============================================================================
@@ -298,6 +334,79 @@ class TestAdminQueue:
         assert resp.status_code == 200
         assert "items" in resp.json()
 
+    def test_queue_list_include_trust_attaches_field(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        admin = _register_and_auth(api_server, monkeypatch, is_admin=True)
+        user = _register_and_auth(api_server)
+
+        content = "Queue item for trust-gradient field shape check."
+        sig, signed_at = _sign_content(user, content)
+        queued = client.post(
+            "/posts",
+            json={"content": content, "signature": sig, "signed_at": signed_at},
+            headers=user["headers"],
+        )
+        assert queued.status_code == 201
+
+        resp = client.get("/admin/queue?include_trust=true", headers=admin["headers"])
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert len(items) >= 1
+        assert "trust_gradient" in items[0]
+        assert items[0]["trust_gradient"] is None
+
+    def test_queue_list_excludes_trust_when_disabled(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        admin = _register_and_auth(api_server, monkeypatch, is_admin=True)
+        user = _register_and_auth(api_server)
+
+        content = "Queue item where trust join is intentionally skipped."
+        sig, signed_at = _sign_content(user, content)
+        queued = client.post(
+            "/posts",
+            json={"content": content, "signature": sig, "signed_at": signed_at},
+            headers=user["headers"],
+        )
+        assert queued.status_code == 201
+
+        resp = client.get("/admin/queue?include_trust=false", headers=admin["headers"])
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert len(items) >= 1
+        assert "trust_gradient" not in items[0]
+
+    def test_admin_safety_endpoint(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        admin = _register_and_auth(api_server, monkeypatch, is_admin=True)
+        resp = client.get("/admin/safety", headers=admin["headers"])
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["state"] == "healthy"
+        assert data["mode"] == "diagnostic"
+
+    def test_admin_approve_remains_open_when_shadow_unknown(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        admin = _register_and_auth(api_server, monkeypatch, is_admin=True)
+        user = _register_and_auth(api_server)
+
+        content = "Structured content that would otherwise be approved."
+        sig, signed_at = _sign_content(user, content)
+        resp = client.post(
+            "/posts",
+            json={"content": content, "signature": sig, "signed_at": signed_at},
+            headers=user["headers"],
+        )
+        queue_id = resp.json()["queue_id"]
+
+        monkeypatch.setenv("SAB_SHADOW_SUMMARY_PATH", str(Path("/tmp/does-not-exist-shadow-summary.json")))
+        resp = client.post(
+            f"/admin/approve/{queue_id}",
+            json={"reason": "diagnostic-only mode"},
+            headers=admin["headers"],
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "approved"
+
     def test_non_admin_blocked(self, fresh_app, monkeypatch):
         client, api_server, _ = fresh_app
         # Register admin first to set allowlist
@@ -327,6 +436,102 @@ class TestAdminQueue:
                            json={"reason": "This meets the quality bar"}, headers=user["headers"])
         assert resp.status_code == 200
         assert resp.json()["status"] == "appealed"
+
+    def test_admin_convergence_scan_clawback_and_override(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        monkeypatch.setenv("SAB_DGC_SHARED_SECRET", "test-shared-secret")
+        admin = _register_and_auth(api_server, monkeypatch, is_admin=True)
+
+        token_resp = client.post("/auth/token", json={"name": "anti-user", "telos": "evaluation"})
+        assert token_resp.status_code == 200
+        user_headers = {
+            "Authorization": f"Bearer {token_resp.json()['token']}",
+            "X-SAB-DGC-Secret": "test-shared-secret",
+        }
+
+        payload = {
+            "event_id": "evt-admin-anti-1",
+            "schema_version": "dgc.v1",
+            "timestamp": "2026-02-16T18:10:00Z",
+            "task_type": "evaluation",
+            "artifact_id": "artifact-admin-anti",
+            "source_alias": "agni-dgc",
+            "gate_scores": {"satya": 0.86, "substance": 0.83},
+            "collapse_dimensions": {"ritual_ack": 0.2},
+            "mission_relevance": 0.85,
+        }
+        first = client.post("/signals/dgc", headers=user_headers, json=payload)
+        assert first.status_code == 200
+
+        second_payload = {**payload, "event_id": "evt-admin-anti-2", "timestamp": "2026-02-16T18:11:00Z"}
+        second = client.post("/signals/dgc", headers=user_headers, json=second_payload)
+        assert second.status_code == 200
+        assert "replay_laundering_risk" in second.json()["anti_gaming_flags"]
+
+        scan = client.get("/admin/convergence/anti-gaming/scan", headers=admin["headers"])
+        assert scan.status_code == 200
+        assert scan.json()["summary"]["suspicious_count"] >= 1
+
+        clawback = client.post(
+            "/admin/convergence/clawback/evt-admin-anti-2",
+            json={"reason": "manual anti-gaming review", "penalty": 0.2},
+            headers=admin["headers"],
+        )
+        assert clawback.status_code == 200
+        assert clawback.json()["status"] == "clawback_applied"
+        assert clawback.json()["gradient"]["trust_adjustment"] <= -0.2
+
+        override = client.post(
+            "/admin/convergence/override/evt-admin-anti-2",
+            json={"reason": "false positive override", "trust_adjustment": 0.0},
+            headers=admin["headers"],
+        )
+        assert override.status_code == 200
+        assert override.json()["status"] == "trust_override_applied"
+        assert override.json()["gradient"]["trust_adjustment"] == 0.0
+
+        outcome = client.post(
+            "/admin/convergence/outcomes/evt-admin-anti-2",
+            json={"outcome_type": "tests", "status": "pass", "evidence": {"suite": "integration"}},
+            headers=admin["headers"],
+        )
+        assert outcome.status_code == 200
+        assert outcome.json()["outcome"]["event_id"] == "evt-admin-anti-2"
+
+        outcomes = client.get(
+            "/admin/convergence/outcomes/evt-admin-anti-2",
+            headers=admin["headers"],
+        )
+        assert outcomes.status_code == 200
+        assert len(outcomes.json()["outcomes"]) >= 1
+
+        darwin_status = client.get("/admin/convergence/darwin/status", headers=admin["headers"])
+        assert darwin_status.status_code == 200
+        assert "policy" in darwin_status.json()
+
+        darwin_run = client.post(
+            "/admin/convergence/darwin/run",
+            json={"dry_run": True, "reason": "integration test", "run_validation": False},
+            headers=admin["headers"],
+        )
+        assert darwin_run.status_code == 200
+        assert "run_id" in darwin_run.json()
+
+        applied = client.get("/audit", params={"action": "trust_clawback_applied"})
+        assert applied.status_code == 200
+        assert len(applied.json()) == 1
+
+        overridden = client.get("/audit", params={"action": "trust_clawback_overridden"})
+        assert overridden.status_code == 200
+        assert len(overridden.json()) == 1
+
+        outcome_audit = client.get("/audit", params={"action": "outcome_witness_recorded"})
+        assert outcome_audit.status_code == 200
+        assert len(outcome_audit.json()) >= 1
+
+        darwin_audit = client.get("/audit", params={"action": "darwin_cycle_ran"})
+        assert darwin_audit.status_code == 200
+        assert len(darwin_audit.json()) >= 1
 
 
 # =============================================================================

@@ -9,13 +9,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Optional
 
 import yaml
 

@@ -102,3 +102,9 @@ __all__ = [
     "SkillVerificationGate",
     "AnomalyDetectionGate",
 ]
+
+
+def main() -> None:
+    """CLI entrypoint for the `dharmic-agora` console script."""
+    from .api_server import main as server_main
+    server_main()

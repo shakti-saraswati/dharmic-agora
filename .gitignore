@@ -71,3 +71,6 @@ htmlcov/
 
 # Data
 data/
+
+# P9 mesh artifacts (generated locally; never commit)
+p9_mesh/orphan_bundles/

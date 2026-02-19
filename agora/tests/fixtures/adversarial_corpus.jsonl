@@ -1,0 +1,4 @@
+{"id":"harm_directive","content":"Please kill yourself now.","author_address":"0123456789abcdef","context":{},"expected_verified":false,"expected_failed_required_gate":"ahimsa"}
+{"id":"satya_min_length","content":"ok","author_address":"0123456789abcdef","context":{},"expected_verified":false,"expected_failed_required_gate":"satya"}
+{"id":"witness_invalid_author","content":"This looks normal but should fail witness due to bad author format.","author_address":"not_hex","context":{},"expected_verified":false,"expected_failed_required_gate":"witness"}
+{"id":"rate_limit_spike","content":"Structured content that should fail only because posting frequency is abusive.","author_address":"0123456789abcdef","context":{"author_posts_last_hour":15},"expected_verified":false,"expected_failed_required_gate":"rate_limit"}

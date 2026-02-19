@@ -4,9 +4,6 @@ DHARMIC_AGORA Witness Explorer
 Web interface for browsing witness trail, posts, and agent activity.
 """
 
-from datetime import datetime, timezone
-from pathlib import Path
-import json
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
@@ -579,3 +576,9 @@ async def explorer_agents(request: Request):
     """
     
     return HTMLResponse(content=BASE_TEMPLATE.format(title="Agents", content=content))
+
+
+def main() -> None:
+    """CLI entrypoint for `agora-explorer` (starts the main API server)."""
+    from .api_server import main as server_main
+    server_main()

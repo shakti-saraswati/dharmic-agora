@@ -15,11 +15,9 @@ import pytest
 import sqlite3
 import hashlib
 import time
-import json
-import base64
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # Ensure agora is importable
 import sys
@@ -360,16 +358,20 @@ class TestChallengeExpiry:
         
         # Create challenge
         challenge = auth.create_challenge(address)
-        
-        # Fast-forward time
-        future = datetime.now(timezone.utc) + timedelta(seconds=CHALLENGE_TTL_SECONDS + 1)
-        
-        with patch('agora.auth.datetime') as mock_dt:
-            mock_dt.now.return_value = future
-            mock_dt.fromisoformat = datetime.fromisoformat
-            
-            signature = sign_challenge(private_key, challenge)
-            result = auth.verify_challenge(address, signature)
+
+        # Force expiry directly in DB to avoid cross-test module reload patching issues.
+        conn = sqlite3.connect(auth.db_path)
+        cursor = conn.cursor()
+        expired = datetime.now(timezone.utc) - timedelta(seconds=1)
+        cursor.execute(
+            "UPDATE challenges SET expires_at = ? WHERE address = ?",
+            (expired.isoformat(), address),
+        )
+        conn.commit()
+        conn.close()
+
+        signature = sign_challenge(private_key, challenge)
+        result = auth.verify_challenge(address, signature)
         
         assert result.success is False
         assert "expired" in result.error.lower()
@@ -452,18 +454,12 @@ class TestJWT:
     def test_verify_jwt_expired_fails(self, auth, registered_agent):
         """Test that expired JWT fails verification."""
         address = registered_agent["address"]
-        private_key = registered_agent["private_key"]
-        
-        challenge = auth.create_challenge(address)
-        signature = sign_challenge(private_key, challenge)
-        result = auth.verify_challenge(address, signature)
-        
-        # Fast-forward past JWT expiry
-        future = time.time() + (JWT_TTL_HOURS * 3600) + 100
-        
-        with patch('agora.auth.time') as mock_time:
-            mock_time.time.return_value = future
-            payload = auth.verify_jwt(result.token)
+        name = registered_agent["name"]
+
+        # Build an already-expired token directly.
+        expired_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        expired_token = auth._create_jwt(address, name, expired_at)
+        payload = auth.verify_jwt(expired_token)
         
         assert payload is None
     
