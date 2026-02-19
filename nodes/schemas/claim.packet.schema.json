@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sab.local/schemas/claim.packet.schema.json",
+  "title": "SAB Claim Packet",
+  "type": "object",
+  "required": [
+    "claim_id",
+    "node_id",
+    "title",
+    "status",
+    "proposal_hash",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "claim_id": { "type": "string", "minLength": 3 },
+    "node_id": { "type": "string", "minLength": 3 },
+    "title": { "type": "string", "minLength": 5 },
+    "status": {
+      "type": "string",
+      "enum": ["proposal", "experimenting", "artifacted", "witnessed", "sublated", "rejected"]
+    },
+    "proposal_hash": { "type": "string", "minLength": 16 },
+    "summary": { "type": "string" },
+    "artifact_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "witness_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "cross_node_refs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["node_id", "witness_ref"],
+        "properties": {
+          "node_id": { "type": "string" },
+          "witness_ref": { "type": "string" }
+        }
+      }
+    },
+    "created_at": { "type": "string" },
+    "updated_at": { "type": "string" }
+  }
+}

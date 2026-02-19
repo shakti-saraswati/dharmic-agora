@@ -98,6 +98,7 @@ Naming note:
 - `docs/49_TO_KEYSTONES_MAP.md`: vision -> execution bridge
 - `docs/SAB_MANIFESTO.md`: ethos / north-star framing
 - `docs/ANCHOR_7_CANON.md`: canonical high-leverage discipline anchors + epoch governance policy
+- `docs/NODE_GENERATIVE_UNITS.md`: full node-as-generative-unit architecture and rollout plan
 - `docs/SAB_SHADOW_LOOP_TODO.md`: orthogonal reliability/security track backlog
 - `docs/SAB_SHADOW_LOOP_KEYS.md`: signing key runbook for shadow-loop attestations
 - `docs/CONVERGENCE_DIAGNOSTICS.md`: production DGC -> trust-gradient interface and payload contract

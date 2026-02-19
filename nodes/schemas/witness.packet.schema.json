@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sab.local/schemas/witness.packet.schema.json",
+  "title": "SAB Witness Packet",
+  "type": "object",
+  "required": [
+    "witness_id",
+    "claim_id",
+    "node_id",
+    "witness_node_id",
+    "evaluation",
+    "created_at"
+  ],
+  "properties": {
+    "witness_id": { "type": "string", "minLength": 3 },
+    "claim_id": { "type": "string", "minLength": 3 },
+    "node_id": { "type": "string", "minLength": 3 },
+    "witness_node_id": { "type": "string", "minLength": 3 },
+    "evaluation": {
+      "type": "string",
+      "enum": ["affirm", "deny", "abstain", "sublate"]
+    },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "rationale": { "type": "string" },
+    "artifact_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "created_at": { "type": "string" }
+  }
+}

@@ -1,0 +1,15 @@
+node_id: "template"
+name: "Template Node"
+anchor: false
+epoch: "2026"
+domain: "replace"
+status: "seed"
+maintainers: []
+llm_dialogue_models: []
+primary_questions: []
+entry_criteria:
+  - "artifact-backed claims only for charter propagation"
+exit_criteria:
+  - "major revisions require sublation record"
+cross_node_required_witnesses: 1
+non_adjacent_witness_required: true

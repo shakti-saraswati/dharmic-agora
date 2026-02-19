@@ -85,3 +85,15 @@ This prevents silent narrative overwrite and forces real interdisciplinary metab
 SAB rewards compounding coherence plus shipped artifacts.
 Volume, charisma, and rhetoric alone are insufficient for influence.
 
+## Implementation Pointer
+
+Anchor node units are instantiated at:
+- `nodes/anchors/anchor-01-math-formal`
+- `nodes/anchors/anchor-02-physics-information`
+- `nodes/anchors/anchor-03-ml-intelligence-engineering`
+- `nodes/anchors/anchor-04-complex-systems-cybernetics`
+- `nodes/anchors/anchor-05-ecology-earth-systems`
+- `nodes/anchors/anchor-06-economics-mechanism-design`
+- `nodes/anchors/anchor-07-dharmic-jain-epistemics`
+
+Node architecture details: `docs/NODE_GENERATIVE_UNITS.md`.

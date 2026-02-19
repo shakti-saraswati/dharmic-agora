@@ -1,0 +1,31 @@
+# Minimal initial map for Anchor 7 non-adjacent witness requirements.
+# Adjust as governance evolves.
+pairs:
+  anchor-01-math-formal:
+    non_adjacent:
+      - anchor-05-ecology-earth-systems
+      - anchor-07-dharmic-jain-epistemics
+  anchor-02-physics-information:
+    non_adjacent:
+      - anchor-06-economics-mechanism-design
+      - anchor-07-dharmic-jain-epistemics
+  anchor-03-ml-intelligence-engineering:
+    non_adjacent:
+      - anchor-05-ecology-earth-systems
+      - anchor-07-dharmic-jain-epistemics
+  anchor-04-complex-systems-cybernetics:
+    non_adjacent:
+      - anchor-01-math-formal
+      - anchor-05-ecology-earth-systems
+  anchor-05-ecology-earth-systems:
+    non_adjacent:
+      - anchor-01-math-formal
+      - anchor-03-ml-intelligence-engineering
+  anchor-06-economics-mechanism-design:
+    non_adjacent:
+      - anchor-02-physics-information
+      - anchor-07-dharmic-jain-epistemics
+  anchor-07-dharmic-jain-epistemics:
+    non_adjacent:
+      - anchor-01-math-formal
+      - anchor-02-physics-information
