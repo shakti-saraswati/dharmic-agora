@@ -43,6 +43,11 @@ except ImportError:
     NACL_AVAILABLE = False
 
 
+def _auth_globals():
+    """Return globals dict used by the imported AgentAuth methods."""
+    return AgentAuth._load_or_create_jwt_secret.__globals__
+
+
 # =============================================================================
 # FIXTURES
 # =============================================================================
@@ -59,8 +64,8 @@ def auth(temp_db):
     """Create an AgentAuth instance with temp database."""
     # Patch the JWT secret file location
     jwt_secret_path = temp_db.parent / ".jwt_secret"
-    
-    with patch('agora.auth.JWT_SECRET_FILE', jwt_secret_path):
+
+    with patch.dict(_auth_globals(), {"JWT_SECRET_FILE": jwt_secret_path}):
         auth_instance = AgentAuth(db_path=temp_db)
         yield auth_instance
 
@@ -732,7 +737,7 @@ class TestDatabase:
     def test_jwt_secret_file_permissions_strict(self, temp_db, monkeypatch, tmp_path):
         """JWT secret should be created with owner-only permissions (0600)."""
         secret_file = tmp_path / "jwt_secret_test.bin"
-        monkeypatch.setattr("agora.auth.JWT_SECRET_FILE", secret_file)
+        monkeypatch.setitem(_auth_globals(), "JWT_SECRET_FILE", secret_file)
 
         AgentAuth(db_path=temp_db)
         mode = secret_file.stat().st_mode & 0o777

@@ -3,38 +3,104 @@ SAB Federation API — AGNI side
 
 Allows RUSHABDEV (and future agents) to:
 - Register as federation members
-- Pull tasks from the task queue  
+- Pull tasks from the task queue
 - Submit evaluation results
 - Query federation health
 
-Simple JSON-backed storage (no new dependencies)
+Simple JSON-backed storage (no new dependencies).
 """
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
-from datetime import datetime, timezone
+
+from __future__ import annotations
+
+import hmac
 import json
 import os
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+from threading import RLock
+from typing import Any, Dict, List, Optional
 
-federation_router = APIRouter(prefix="/api/federation", tags=["federation"])
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from pydantic import BaseModel, Field
 
-# Simple JSON-backed storage (no new deps)
-FEDERATION_DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "federation")
-os.makedirs(FEDERATION_DATA_DIR, exist_ok=True)
+FEDERATION_SHARED_SECRET_ENV = "SAB_FEDERATION_SHARED_SECRET"
+FEDERATION_SHARED_SECRET_HEADER = "X-SAB-Federation-Secret"
+FEDERATION_DATA_DIR_ENV = "SAB_FEDERATION_DATA_DIR"
+_DATA_LOCK = RLock()
+
+
+def _get_federation_data_dir() -> Path:
+    configured = os.environ.get(FEDERATION_DATA_DIR_ENV, "").strip()
+    if configured:
+        return Path(configured)
+    return Path(__file__).resolve().parent.parent / "data" / "federation"
+
+
+FEDERATION_DATA_DIR = _get_federation_data_dir()
+FEDERATION_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _require_federation_auth(
+    x_sab_federation_secret: Optional[str] = Header(
+        default=None, alias=FEDERATION_SHARED_SECRET_HEADER
+    ),
+) -> None:
+    """Require shared-secret auth when SAB_FEDERATION_SHARED_SECRET is configured."""
+    expected = os.environ.get(FEDERATION_SHARED_SECRET_ENV, "").strip()
+    if not expected:
+        return
+    provided = (x_sab_federation_secret or "").strip()
+    if provided and hmac.compare_digest(provided, expected):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid federation shared secret",
+    )
+
+
+federation_router = APIRouter(
+    prefix="/api/federation",
+    tags=["federation"],
+    dependencies=[Depends(_require_federation_auth)],
+)
 
 
 def _load_json(filename: str, default: Any = None) -> Any:
-    path = os.path.join(FEDERATION_DATA_DIR, filename)
-    if os.path.exists(path):
-        with open(path) as f:
-            return json.load(f)
-    return default if default is not None else {}
+    path = FEDERATION_DATA_DIR / filename
+    with _DATA_LOCK:
+        if not path.exists():
+            return default if default is not None else {}
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                return json.load(f)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Federation store is corrupt: {filename}",
+            ) from exc
 
 
-def _save_json(filename: str, data: Any):
-    path = os.path.join(FEDERATION_DATA_DIR, filename)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
+def _save_json(filename: str, data: Any) -> None:
+    path = FEDERATION_DATA_DIR / filename
+    FEDERATION_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    with _DATA_LOCK:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{filename}.",
+            suffix=".tmp",
+            dir=str(FEDERATION_DATA_DIR),
+        )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, sort_keys=True)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
 
 
 # =============================================================================
@@ -52,7 +118,7 @@ class AgentRegistration(BaseModel):
 class TaskResult(BaseModel):
     agent_id: str
     status: str
-    result: Dict[str, Any] = {}
+    result: Dict[str, Any] = Field(default_factory=dict)
 
 
 class Evaluation(BaseModel):
@@ -71,6 +137,12 @@ class TaskCreate(BaseModel):
     priority: str = "normal"
 
 
+def _dump_model(model: BaseModel) -> Dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
+    return model.dict()  # pragma: no cover - pydantic v1 compatibility
+
+
 # =============================================================================
 # FEDERATION ENDPOINTS
 # =============================================================================
@@ -79,7 +151,7 @@ class TaskCreate(BaseModel):
 async def register_agent(reg: AgentRegistration):
     """Register a new agent with the federation."""
     agents = _load_json("agents.json", {})
-    
+
     # Update if exists, create if new
     agents[reg.agent_id] = {
         "agent_id": reg.agent_id,
@@ -88,7 +160,7 @@ async def register_agent(reg: AgentRegistration):
         "models": reg.models,
         "status": reg.status,
         "registered_at": datetime.now(timezone.utc).isoformat(),
-        "last_seen": datetime.now(timezone.utc).isoformat()
+        "last_seen": datetime.now(timezone.utc).isoformat(),
     }
     _save_json("agents.json", agents)
     return {"status": "registered", "agent_id": reg.agent_id}
@@ -113,7 +185,7 @@ async def get_agent(agent_id: str):
 async def create_task(task: TaskCreate):
     """Create a new task in the federation queue."""
     tasks = _load_json("tasks.json", [])
-    
+
     task_entry = {
         "task_id": task.task_id,
         "title": task.title,
@@ -123,7 +195,7 @@ async def create_task(task: TaskCreate):
         "status": "pending",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "result": {}
+        "result": {},
     }
     tasks.append(task_entry)
     _save_json("tasks.json", tasks)
@@ -135,12 +207,12 @@ async def get_tasks(agent_id: Optional[str] = None, status: Optional[str] = "pen
     """Get tasks from the federation queue."""
     tasks = _load_json("tasks.json", [])
     filtered = tasks
-    
+
     if agent_id:
         filtered = [t for t in filtered if t.get("assigned_to") in (agent_id, None, "any")]
     if status:
         filtered = [t for t in filtered if t.get("status") == status]
-    
+
     return filtered
 
 
@@ -174,9 +246,9 @@ async def submit_evaluation(eval: Evaluation):
     """Submit an evaluation result."""
     evals = _load_json("evaluations.json", [])
     entry = {
-        **eval.dict(),
+        **_dump_model(eval),
         "evaluation_id": f"eval-{len(evals)+1:05d}",
-        "evaluated_at": datetime.now(timezone.utc).isoformat()
+        "evaluated_at": datetime.now(timezone.utc).isoformat(),
     }
     evals.append(entry)
     _save_json("evaluations.json", evals)
@@ -188,12 +260,12 @@ async def list_evaluations(post_id: Optional[str] = None, evaluator_id: Optional
     """List evaluations, optionally filtered."""
     evals = _load_json("evaluations.json", [])
     filtered = evals
-    
+
     if post_id:
         filtered = [e for e in filtered if e.get("post_id") == post_id]
     if evaluator_id:
         filtered = [e for e in filtered if e.get("evaluator_id") == evaluator_id]
-    
+
     return filtered
 
 
@@ -203,7 +275,7 @@ async def agent_heartbeat(agent_id: str):
     agents = _load_json("agents.json", {})
     if agent_id not in agents:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not registered")
-    
+
     agents[agent_id]["last_seen"] = datetime.now(timezone.utc).isoformat()
     _save_json("agents.json", agents)
     return {"acknowledged": True, "agent_id": agent_id}
@@ -215,7 +287,7 @@ async def federation_health():
     agents = _load_json("agents.json", {})
     evals = _load_json("evaluations.json", [])
     tasks = _load_json("tasks.json", [])
-    
+
     # Count active agents (seen in last 5 minutes)
     now = datetime.now(timezone.utc)
     active_count = 0
@@ -225,14 +297,14 @@ async def federation_health():
             last_seen = datetime.fromisoformat(last_seen_str.replace("Z", "+00:00"))
             if (now - last_seen).total_seconds() < 300:  # 5 minutes
                 active_count += 1
-        except:
+        except (TypeError, ValueError):
             pass
-    
+
     return {
         "status": "operational",
         "registered_agents": len(agents),
         "active_agents": active_count,
         "total_evaluations": len(evals),
         "pending_tasks": len([t for t in tasks if t.get("status") == "pending"]),
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }

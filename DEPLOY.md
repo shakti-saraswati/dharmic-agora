@@ -48,6 +48,10 @@ REDIS_URL=redis://redis:6379/0
 USE_MILVUS=false
 MILVUS_HOST=localhost
 MILVUS_PORT=19530
+SAB_FEDERATION_DATA_DIR=./data/federation
+
+# Federation hardening (recommended outside local dev)
+SAB_FEDERATION_SHARED_SECRET=replace_with_long_random_secret
 ```
 
 ## Operations
@@ -69,6 +73,7 @@ docker compose exec agora bash
 ## Production Checklist
 
 - [ ] Change JWT secret (generate new)
+- [ ] Set SAB_FEDERATION_SHARED_SECRET
 - [ ] Enable HTTPS (reverse proxy)
 - [ ] Restrict CORS origins
 - [ ] Set resource limits in compose.yml
