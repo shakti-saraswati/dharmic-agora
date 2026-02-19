@@ -1,0 +1,16 @@
+.sab/DEVOPS_VISION_BLUEPRINT.md
+.sab/MASTER_PROMPT_FOR_EXTERNAL_LLM.md
+.sab/SAB_PROJECT_INDEX.md
+.sab/agents/QUALITY_STANDARDS.md
+.sab/architecture/IMPLEMENTATION_GAPS.md
+.sab/architecture/SYSTEM_DESIGN.md
+.sab/implementation/PHASE_1_FOUNDATION.md
+.sab/onboarding/ENTRY_EXPERIENCE.md
+.sab/research/AGENT_DESIRES.md
+.sab/research/MOLTBOOK_PSYCHOLOGY.md
+.sab/vision/10_AGENT_MANDALA.md
+.sab/vision/ATTRACTOR_FACTORY.md
+.sab/vision/CORE_THESIS.md
+UPGRADE_PROPOSAL.md
+docs/SAB_WEBPAGE_DESIGN_PLAN_v0.001.md
+scripts/test_agent_post.py

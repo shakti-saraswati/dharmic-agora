@@ -24,6 +24,7 @@ Usage:
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import sqlite3
 import time
@@ -260,6 +261,7 @@ class AgentAuth:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS simple_tokens (
                 token TEXT PRIMARY KEY,
+                token_hash TEXT UNIQUE,
                 address TEXT NOT NULL UNIQUE,
                 name TEXT NOT NULL,
                 telos TEXT DEFAULT '',
@@ -267,6 +269,7 @@ class AgentAuth:
                 expires_at TEXT NOT NULL
             )
         """)
+        self._ensure_simple_token_hash_schema(cursor)
 
         # API keys (Tier 2 — medium barrier, stored as hash)
         cursor.execute("""
@@ -283,16 +286,71 @@ class AgentAuth:
         conn.commit()
         conn.close()
 
+    def _ensure_simple_token_hash_schema(self, cursor: sqlite3.Cursor):
+        """
+        Ensure simple token storage uses hashed secrets.
+
+        Backward compatibility:
+        - Legacy rows may have plaintext token in `token` and null `token_hash`.
+        - We backfill `token_hash` and replace token with a non-secret reference.
+        """
+        cursor.execute("PRAGMA table_info(simple_tokens)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        if "token_hash" not in columns:
+            cursor.execute("ALTER TABLE simple_tokens ADD COLUMN token_hash TEXT")
+
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_simple_tokens_token_hash ON simple_tokens(token_hash)"
+        )
+
+        legacy_rows = cursor.execute(
+            """
+            SELECT token FROM simple_tokens
+            WHERE (token_hash IS NULL OR token_hash = '')
+              AND token IS NOT NULL
+              AND token != ''
+            """
+        ).fetchall()
+
+        for (legacy_token,) in legacy_rows:
+            token_hash = hashlib.sha256(legacy_token.encode()).hexdigest()
+            token_ref = f"legacy_{token_hash[:24]}"
+            cursor.execute(
+                """
+                UPDATE simple_tokens
+                SET token = ?, token_hash = ?
+                WHERE token = ? AND (token_hash IS NULL OR token_hash = '')
+                """,
+                (token_ref, token_hash, legacy_token),
+            )
+
     def _load_or_create_jwt_secret(self) -> bytes:
         """Load or create JWT signing secret."""
         JWT_SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
 
         if JWT_SECRET_FILE.exists():
+            # Enforce strict permission when loading existing secret.
+            try:
+                if (JWT_SECRET_FILE.stat().st_mode & 0o777) != 0o600:
+                    JWT_SECRET_FILE.chmod(0o600)
+            except OSError:
+                pass
             return JWT_SECRET_FILE.read_bytes()
 
         secret = secrets.token_bytes(32)
-        JWT_SECRET_FILE.write_bytes(secret)
-        JWT_SECRET_FILE.chmod(0o600)  # Owner read/write only
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+
+        try:
+            fd = os.open(str(JWT_SECRET_FILE), flags, 0o600)
+        except FileExistsError:
+            # Another process created it between exists() and open().
+            return JWT_SECRET_FILE.read_bytes()
+
+        with os.fdopen(fd, "wb") as f:
+            f.write(secret)
+            f.flush()
+            os.fsync(f.fileno())
         return secret
 
     def _witness(self, action: str, agent_address: str, data: dict):
@@ -622,15 +680,20 @@ class AgentAuth:
             {"token": "sab_t_...", "address": "...", "name": "...", "expires_at": "..."}
         """
         token = f"sab_t_{secrets.token_hex(24)}"
-        address = f"t_{hashlib.sha256(token.encode()).hexdigest()[:14]}"
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        token_ref = f"ref_{token_hash[:24]}"
+        address = f"t_{token_hash[:14]}"
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(hours=JWT_TTL_HOURS)
 
         conn = sqlite3.connect(self.db_path)
         try:
             conn.execute(
-                "INSERT INTO simple_tokens (token, address, name, telos, created_at, expires_at) VALUES (?,?,?,?,?,?)",
-                (token, address, name, telos, now.isoformat(), expires_at.isoformat()),
+                """
+                INSERT INTO simple_tokens (token, token_hash, address, name, telos, created_at, expires_at)
+                VALUES (?,?,?,?,?,?,?)
+                """,
+                (token_ref, token_hash, address, name, telos, now.isoformat(), expires_at.isoformat()),
             )
             conn.commit()
         finally:
@@ -645,20 +708,41 @@ class AgentAuth:
         
         Uses constant-time comparison to prevent timing attacks.
         """
+        if not isinstance(token, str):
+            return None
         if not token.startswith("sab_t_"):
             return None
+        if len(token) > 256:
+            return None
+
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
         
         conn = sqlite3.connect(self.db_path)
         try:
-            # Fetch all non-expired tokens to prevent timing attacks
-            # that could reveal token existence through query timing
             now = datetime.now(timezone.utc).isoformat()
+            row = conn.execute(
+                """
+                SELECT address, name, telos, expires_at
+                FROM simple_tokens
+                WHERE token_hash = ? AND expires_at > ?
+                """,
+                (token_hash, now),
+            ).fetchone()
+            if row:
+                address, name, telos, _ = row
+                return {"address": address, "name": name, "telos": telos,
+                        "reputation": 0.0, "auth_method": "token"}
+
+            # Legacy fallback: plaintext rows that predate token_hash migration.
             rows = conn.execute(
-                "SELECT token, address, name, telos, expires_at FROM simple_tokens WHERE expires_at > ?",
+                """
+                SELECT token, address, name, telos, expires_at
+                FROM simple_tokens
+                WHERE (token_hash IS NULL OR token_hash = '') AND expires_at > ?
+                """,
                 (now,),
             ).fetchall()
-            
-            # Constant-time comparison across all valid tokens
+
             for stored_token, address, name, telos, expires_at in rows:
                 if hmac.compare_digest(stored_token, token):
                     return {"address": address, "name": name, "telos": telos,

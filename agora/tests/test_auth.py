@@ -712,6 +712,32 @@ class TestDatabase:
         assert agent.reputation == 0.0
         assert agent.public_key_hex == public_key.decode()
 
+    def test_simple_token_not_stored_in_plaintext(self, auth, temp_db):
+        """Simple token table should store a hash, not raw bearer secret."""
+        result = auth.create_simple_token("plaincheck", telos="check")
+        raw_token = result["token"]
+
+        conn = sqlite3.connect(temp_db)
+        row = conn.execute(
+            "SELECT token, token_hash FROM simple_tokens WHERE address = ?",
+            (result["address"],),
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        stored_ref, stored_hash = row
+        assert stored_ref != raw_token
+        assert stored_hash == hashlib.sha256(raw_token.encode()).hexdigest()
+
+    def test_jwt_secret_file_permissions_strict(self, temp_db, monkeypatch, tmp_path):
+        """JWT secret should be created with owner-only permissions (0600)."""
+        secret_file = tmp_path / "jwt_secret_test.bin"
+        monkeypatch.setattr("agora.auth.JWT_SECRET_FILE", secret_file)
+
+        AgentAuth(db_path=temp_db)
+        mode = secret_file.stat().st_mode & 0o777
+        assert mode == 0o600
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
