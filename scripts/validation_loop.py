@@ -111,6 +111,14 @@ def main() -> int:
         "print('syntax_ok', len(files))"
     )]
     results.append(_run(syntax_cmd, out_dir, "syntax", env))
+    results.append(
+        _run(
+            [sys.executable, "scripts/enforce_claim_promotions.py"],
+            out_dir,
+            "claim_promotion_enforcement",
+            env,
+        )
+    )
 
     if args.suite in ("unit", "all"):
         if shutil.which("pytest"):

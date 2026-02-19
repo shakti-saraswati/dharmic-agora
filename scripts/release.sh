@@ -29,6 +29,11 @@ echo ""
 echo "Validating NAME_REGISTRY..."
 python3 scripts/check_name_registry.py
 
+# Enforce claim promotion thresholds
+echo ""
+echo "Enforcing claim promotion thresholds..."
+python3 scripts/enforce_claim_promotions.py
+
 # Run integration test
 echo ""
 echo "Running integration test..."

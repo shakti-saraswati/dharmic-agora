@@ -95,6 +95,11 @@ This enables:
 
 ## Submission and Propagation Defaults
 
+Promotion requests are explicit claim metadata, not inferred state:
+- set `requested_stage` (or `requested_stages`) in claim packets
+- optional nested form: `promotion.requested_stage(s)`
+- CI/release validation enforces thresholds for any requested promotion
+
 - Paper draft trigger:
   - >=2 cross-model affirm witnesses
   - >=1 non-adjacent witness

@@ -28,6 +28,21 @@
     "non_adjacent_witness_count": { "type": "integer", "minimum": 0 },
     "proposal_hash": { "type": "string", "minLength": 16 },
     "summary": { "type": "string" },
+    "requested_stage": { "type": "string" },
+    "requested_stages": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "promotion": {
+      "type": "object",
+      "properties": {
+        "requested_stage": { "type": "string" },
+        "requested_stages": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
     "artifact_refs": {
       "type": "array",
       "items": { "type": "string" }

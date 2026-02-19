@@ -31,6 +31,10 @@ jobs:
       run: |
         python3 scripts/check_name_registry.py
 
+    - name: Enforce claim promotion thresholds
+      run: |
+        python3 scripts/enforce_claim_promotions.py
+
     - name: Shadow loop runtime check
       run: |
         python3 scripts/orthogonal_safety_loop.py --output-dir /tmp/shadow_loop_ci
