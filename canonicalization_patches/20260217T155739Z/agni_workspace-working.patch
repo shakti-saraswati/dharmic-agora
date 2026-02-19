@@ -1,0 +1,1318 @@
+diff --git a/agora/api.py b/agora/api.py
+index e219717..baac3a0 100644
+--- a/agora/api.py
++++ b/agora/api.py
+@@ -12,7 +12,7 @@ from datetime import datetime, timezone
+ from pathlib import Path
+ from typing import List, Optional
+ 
+-from fastapi import FastAPI, HTTPException, Depends, Header, Query
++from fastapi import FastAPI, HTTPException, Depends, Header, Query, Request
+ from fastapi.middleware.cors import CORSMiddleware
+ from pydantic import BaseModel, Field
+ 
+@@ -22,6 +22,7 @@ from .gates import GateProtocol, GateResult, ALL_GATES
+ from .models import (
+     generate_content_id
+ )
++from .rate_limit import InMemoryFixedWindowLimiter
+ 
+ # =============================================================================
+ # CONFIGURATION
+@@ -191,6 +192,10 @@ db = AgoraDB()
+ 
+ auth_service = AgentAuth()
+ 
++# Best-effort DoS protection for challenge generation.
++_AUTH_CHALLENGE_IP_LIMITER = InMemoryFixedWindowLimiter(limit=30, window_seconds=60)
++_AUTH_CHALLENGE_ADDR_LIMITER = InMemoryFixedWindowLimiter(limit=10, window_seconds=60)
++
+ def get_current_agent(authorization: Optional[str] = Header(None)) -> Optional[dict]:
+     """Extract and verify JWT from Authorization header."""
+     if not authorization:
+@@ -251,14 +256,33 @@ app.add_middleware(
+ # =============================================================================
+ 
+ @app.post("/auth/challenge", response_model=ChallengeResponse)
+-async def create_challenge(request: ChallengeRequest):
+-    """Create authentication challenge for agent."""
+-    try:
+-        challenge_bytes = auth_service.create_challenge(request.address)
+-        return ChallengeResponse(
+-            challenge=challenge_bytes.hex(),
+-            expires_in=60
++async def create_challenge(payload: ChallengeRequest, http_request: Request):
++    """Create authentication challenge for agent.
++
++    SECURITY:
++    - Rate limited per IP and per address to mitigate challenge-flood DoS.
++    """
++    client_ip = getattr(getattr(http_request, "client", None), "host", None) or "unknown"
++
++    ip_rl = _AUTH_CHALLENGE_IP_LIMITER.hit(f"ip:{client_ip}")
++    if not ip_rl.allowed:
++        raise HTTPException(
++            status_code=429,
++            detail="rate_limited_ip",
++            headers={"Retry-After": str(ip_rl.reset_in_seconds)},
+         )
++
++    addr_rl = _AUTH_CHALLENGE_ADDR_LIMITER.hit(f"addr:{payload.address}")
++    if not addr_rl.allowed:
++        raise HTTPException(
++            status_code=429,
++            detail="rate_limited_address",
++            headers={"Retry-After": str(addr_rl.reset_in_seconds)},
++        )
++
++    try:
++        challenge_bytes = auth_service.create_challenge(payload.address)
++        return ChallengeResponse(challenge=challenge_bytes.hex(), expires_in=60)
+     except ValueError as e:
+         raise HTTPException(status_code=400, detail=str(e))
+ 
+diff --git a/agora/api_server.py b/agora/api_server.py
+index 344f46a..b37ec8a 100644
+--- a/agora/api_server.py
++++ b/agora/api_server.py
+@@ -12,16 +12,21 @@ Run: uvicorn agora.api_server:app --reload
+ 
+ import hashlib
+ import json
++import os
++import ssl
+ import sqlite3
+ from datetime import datetime, timezone
+ from pathlib import Path
+ from typing import List, Optional, Literal
+ from contextlib import contextmanager
+ 
+-from fastapi import FastAPI, HTTPException, Depends, Header, status
++from fastapi import FastAPI, HTTPException, Depends, Header, Request, status
+ from fastapi.middleware.cors import CORSMiddleware
+ from pydantic import BaseModel, Field
+ 
++from starlette.middleware.base import BaseHTTPMiddleware
++from starlette.responses import RedirectResponse
++
+ # Import authentication module
+ try:
+     from agora.auth import AgentAuth, generate_agent_keypair, sign_challenge
+@@ -31,6 +36,8 @@ except ImportError:
+     sys.path.insert(0, str(Path(__file__).parent.parent))
+     from agora.auth import AgentAuth
+ 
++from agora.rate_limit import InMemoryFixedWindowLimiter
++
+ # =============================================================================
+ # CONFIGURATION
+ # =============================================================================
+@@ -380,6 +387,15 @@ class GateStatus(BaseModel):
+     all_gates: List[str]
+ 
+ 
++class ChallengeRequest(BaseModel):
++    address: str
++
++
++class ChallengeResponse(BaseModel):
++    challenge: str
++    expires_in: int = 60
++
++
+ # =============================================================================
+ # AUTHENTICATION DEPENDENCY
+ # =============================================================================
+@@ -387,6 +403,10 @@ class GateStatus(BaseModel):
+ # Global auth instance
+ _auth = AgentAuth()
+ 
++# Best-effort DoS protection for challenge generation.
++_AUTH_CHALLENGE_IP_LIMITER = InMemoryFixedWindowLimiter(limit=30, window_seconds=60)
++_AUTH_CHALLENGE_ADDR_LIMITER = InMemoryFixedWindowLimiter(limit=10, window_seconds=60)
++
+ 
+ async def get_current_agent(authorization: Optional[str] = Header(None)) -> dict:
+     """
+@@ -431,6 +451,44 @@ async def get_current_agent(authorization: Optional[str] = Header(None)) -> dict
+     }
+ 
+ 
++# =============================================================================
++# HTTPS ENFORCEMENT
++# =============================================================================
++
++class ForwardedHTTPSRedirectMiddleware(BaseHTTPMiddleware):
++    """Redirect HTTP -> HTTPS using X-Forwarded-Proto when behind a proxy.
++
++    Notes:
++    - This protects against accidental plaintext access when running behind an L7 proxy.
++    - TLS *version* enforcement (>=1.3) must be configured at the TLS termination layer
++      (e.g., Caddy/Nginx/Cloudflare) or within the ASGI server SSLContext.
++    """
++
++    async def dispatch(self, request, call_next):
++        raw_proto = request.headers.get("x-forwarded-proto") or request.url.scheme
++        # Some proxies send comma-separated values (e.g. "https,http").
++        proto = raw_proto.split(",", 1)[0].strip().lower()
++
++        # Allow local dev without redirects.
++        client_host = getattr(getattr(request, "client", None), "host", None)
++        is_local = client_host in {"127.0.0.1", "::1", "localhost"}
++
++        if proto != "https" and not is_local:
++            url = request.url.replace(scheme="https")
++            return RedirectResponse(url=str(url), status_code=308)
++
++        response = await call_next(request)
++
++        # Add HSTS when we are serving https (or proxy says https).
++        if proto == "https":
++            response.headers.setdefault(
++                "Strict-Transport-Security",
++                "max-age=31536000; includeSubDomains",
++            )
++
++        return response
++
++
+ # =============================================================================
+ # FASTAPI APP
+ # =============================================================================
+@@ -443,10 +501,22 @@ app = FastAPI(
+     redoc_url="/redoc"
+ )
+ 
++# Enforce HTTPS (behind proxy via X-Forwarded-Proto)
++app.add_middleware(ForwardedHTTPSRedirectMiddleware)
++
+ # CORS middleware
++# SECURITY: do NOT use wildcard origins with credentials enabled.
++# Configure allowed origins via SAB_ALLOWED_ORIGINS (comma-separated).
++# Example: SAB_ALLOWED_ORIGINS="https://agora.shakti-saraswati.org,https://staging.agora.shakti-saraswati.org"
++allowed_origins = [
++    origin.strip()
++    for origin in os.environ.get("SAB_ALLOWED_ORIGINS", "https://agora.shakti-saraswati.org").split(",")
++    if origin.strip()
++]
++
+ app.add_middleware(
+     CORSMiddleware,
+-    allow_origins=["*"],  # Configure appropriately for production
++    allow_origins=allowed_origins,
+     allow_credentials=True,
+     allow_methods=["*"],
+     allow_headers=["*"],
+@@ -459,6 +529,42 @@ async def startup():
+     init_database()
+ 
+ 
++# =============================================================================
++# AUTHENTICATION ENDPOINTS
++# =============================================================================
++
++@app.post("/auth/challenge", response_model=ChallengeResponse)
++async def create_challenge(payload: ChallengeRequest, http_request: Request):
++    """Create authentication challenge for agent.
++
++    SECURITY:
++    - Rate limited per IP and per address to mitigate challenge-flood DoS.
++    """
++    client_ip = getattr(getattr(http_request, "client", None), "host", None) or "unknown"
++
++    ip_rl = _AUTH_CHALLENGE_IP_LIMITER.hit(f"ip:{client_ip}")
++    if not ip_rl.allowed:
++        raise HTTPException(
++            status_code=429,
++            detail="rate_limited_ip",
++            headers={"Retry-After": str(ip_rl.reset_in_seconds)},
++        )
++
++    addr_rl = _AUTH_CHALLENGE_ADDR_LIMITER.hit(f"addr:{payload.address}")
++    if not addr_rl.allowed:
++        raise HTTPException(
++            status_code=429,
++            detail="rate_limited_address",
++            headers={"Retry-After": str(addr_rl.reset_in_seconds)},
++        )
++
++    try:
++        challenge_bytes = _auth.create_challenge(payload.address)
++        return ChallengeResponse(challenge=challenge_bytes.hex(), expires_in=60)
++    except ValueError as e:
++        raise HTTPException(status_code=400, detail=str(e))
++
++
+ # =============================================================================
+ # POSTS ENDPOINTS
+ # =============================================================================
+@@ -949,4 +1055,26 @@ async def root():
+ 
+ if __name__ == "__main__":
+     import uvicorn
+-    uvicorn.run(app, host="0.0.0.0", port=8000)
++
++    # NOTE: For production, terminate TLS at an edge proxy (Caddy/Nginx/Cloudflare)
++    # and enforce TLS >= 1.3 there.
++    #
++    # If terminating TLS directly in uvicorn, we require TLS 1.3.
++    ssl_certfile = os.getenv("AGORA_SSL_CERTFILE")
++    ssl_keyfile = os.getenv("AGORA_SSL_KEYFILE")
++
++    run_kwargs = {
++        "app": app,
++        "host": "0.0.0.0",
++        "port": 8000,
++        "ssl_certfile": ssl_certfile,
++        "ssl_keyfile": ssl_keyfile,
++    }
++
++    if ssl_certfile and ssl_keyfile:
++        tls13_protocol = getattr(ssl, "PROTOCOL_TLSv1_3", None)
++        if tls13_protocol is None:
++            raise RuntimeError("TLS 1.3 is required but not supported by this Python/OpenSSL build")
++        run_kwargs["ssl_version"] = tls13_protocol
++
++    uvicorn.run(**run_kwargs)
+diff --git a/agora/api_unified.py b/agora/api_unified.py
+index c94f7fd..ed58c2b 100644
+--- a/agora/api_unified.py
++++ b/agora/api_unified.py
+@@ -20,7 +20,7 @@ from datetime import datetime, timezone
+ from pathlib import Path
+ from typing import List, Optional, Literal
+ 
+-from fastapi import FastAPI, HTTPException, Depends, Header, Query, status
++from fastapi import FastAPI, HTTPException, Depends, Header, Query, Request, status
+ from fastapi.middleware.cors import CORSMiddleware
+ from pydantic import BaseModel, Field
+ 
+@@ -31,6 +31,7 @@ from .models import generate_content_id
+ from .moderation import ModerationStore
+ from .pilot import PilotManager
+ from .reputation import is_silenced, get_score, update_score
++from .rate_limit import InMemoryFixedWindowLimiter
+ 
+ # =============================================================================
+ # CONFIGURATION
+@@ -352,6 +353,10 @@ def record_audit(action: str, agent_address: Optional[str],
+ 
+ auth_service = AgentAuth()
+ 
++# Best-effort DoS protection for challenge generation.
++_AUTH_CHALLENGE_IP_LIMITER = InMemoryFixedWindowLimiter(limit=30, window_seconds=60)
++_AUTH_CHALLENGE_ADDR_LIMITER = InMemoryFixedWindowLimiter(limit=10, window_seconds=60)
++
+ def get_current_agent(authorization: Optional[str] = Header(None)) -> Optional[dict]:
+     """Extract and verify JWT from Authorization header."""
+     if not authorization:
+@@ -421,6 +426,15 @@ app.add_middleware(
+     allow_headers=["*"],
+ )
+ 
++# Prometheus metrics instrumentation
++import os as _os
++if _os.environ.get("SAB_ENABLE_METRICS", "false").lower() in {"1", "true", "yes"}:
++    try:
++        from prometheus_fastapi_instrumentator import Instrumentator as _Instrumentator
++        _Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=True)
++    except ImportError:
++        pass
++
+ # =============================================================================
+ # ROOT & HEALTH
+ # =============================================================================
+@@ -451,14 +465,33 @@ async def health_check():
+ # =============================================================================
+ 
+ @app.post("/auth/challenge", response_model=ChallengeResponse)
+-async def create_challenge(request: ChallengeRequest):
+-    """Create authentication challenge for agent."""
+-    try:
+-        challenge_bytes = auth_service.create_challenge(request.address)
+-        return ChallengeResponse(
+-            challenge=challenge_bytes.hex(),
+-            expires_in=60
++async def create_challenge(payload: ChallengeRequest, http_request: Request):
++    """Create authentication challenge for agent.
++
++    SECURITY:
++    - Rate limited per IP and per address to mitigate challenge-flood DoS.
++    """
++    client_ip = getattr(getattr(http_request, "client", None), "host", None) or "unknown"
++
++    ip_rl = _AUTH_CHALLENGE_IP_LIMITER.hit(f"ip:{client_ip}")
++    if not ip_rl.allowed:
++        raise HTTPException(
++            status_code=429,
++            detail="rate_limited_ip",
++            headers={"Retry-After": str(ip_rl.reset_in_seconds)},
++        )
++
++    addr_rl = _AUTH_CHALLENGE_ADDR_LIMITER.hit(f"addr:{payload.address}")
++    if not addr_rl.allowed:
++        raise HTTPException(
++            status_code=429,
++            detail="rate_limited_address",
++            headers={"Retry-After": str(addr_rl.reset_in_seconds)},
+         )
++
++    try:
++        challenge_bytes = auth_service.create_challenge(payload.address)
++        return ChallengeResponse(challenge=challenge_bytes.hex(), expires_in=60)
+     except ValueError as e:
+         raise HTTPException(status_code=400, detail=str(e))
+ 
+diff --git a/agora/auth.py b/agora/auth.py
+index f1b4aca..bdf0f1e 100644
+--- a/agora/auth.py
++++ b/agora/auth.py
+@@ -24,9 +24,17 @@ Usage:
+ import hashlib
+ import hmac
+ import json
++import os
+ import secrets
+ import sqlite3
+ import time
++
++# bcrypt for strong token hashing (Tier 1 simple tokens)
++try:
++    import bcrypt  # type: ignore
++    BCRYPT_AVAILABLE = True
++except ImportError:
++    BCRYPT_AVAILABLE = False
+ from dataclasses import dataclass
+ from datetime import datetime, timedelta, timezone
+ from pathlib import Path
+@@ -257,9 +265,14 @@ class AgentAuth:
+         """)
+ 
+         # Simple tokens (Tier 1 — lowest barrier)
++        # SECURITY: Do NOT store bearer tokens in plaintext.
++        # We store:
++        # - token_sha256: fast lookup key (deterministic)
++        # - token_bcrypt: slow hash (bcrypt) to prevent offline guessing
+         cursor.execute("""
+             CREATE TABLE IF NOT EXISTS simple_tokens (
+-                token TEXT PRIMARY KEY,
++                token_sha256 TEXT PRIMARY KEY,
++                token_bcrypt TEXT NOT NULL,
+                 address TEXT NOT NULL UNIQUE,
+                 name TEXT NOT NULL,
+                 telos TEXT DEFAULT '',
+@@ -280,19 +293,89 @@ class AgentAuth:
+             )
+         """)
+ 
++        # If an older schema exists (token stored in plaintext), migrate in-place.
++        # NOTE: This is safe because the old table contains the raw tokens, which
++        # we can hash and then delete.
++        cols = [r[1] for r in cursor.execute("PRAGMA table_info(simple_tokens)").fetchall()]
++        if "token" in cols:
++            if not BCRYPT_AVAILABLE:
++                raise ImportError("bcrypt required to migrate simple_tokens (pip install bcrypt)")
++
++            cursor.execute("""
++                CREATE TABLE IF NOT EXISTS simple_tokens_v2 (
++                    token_sha256 TEXT PRIMARY KEY,
++                    token_bcrypt TEXT NOT NULL,
++                    address TEXT NOT NULL UNIQUE,
++                    name TEXT NOT NULL,
++                    telos TEXT DEFAULT '',
++                    created_at TEXT NOT NULL,
++                    expires_at TEXT NOT NULL
++                )
++            """)
++
++            rows = cursor.execute(
++                "SELECT token, address, name, telos, created_at, expires_at FROM simple_tokens"
++            ).fetchall()
++            for token, address, name, telos, created_at, expires_at in rows:
++                token_sha256 = hashlib.sha256(token.encode()).hexdigest()
++                token_bcrypt = bcrypt.hashpw(token.encode(), bcrypt.gensalt()).decode()
++                cursor.execute(
++                    "INSERT OR REPLACE INTO simple_tokens_v2 (token_sha256, token_bcrypt, address, name, telos, created_at, expires_at) VALUES (?,?,?,?,?,?,?)",
++                    (token_sha256, token_bcrypt, address, name, telos, created_at, expires_at),
++                )
++
++            cursor.execute("DROP TABLE simple_tokens")
++            cursor.execute("ALTER TABLE simple_tokens_v2 RENAME TO simple_tokens")
++
+         conn.commit()
+         conn.close()
+ 
+     def _load_or_create_jwt_secret(self) -> bytes:
+-        """Load or create JWT signing secret."""
++        """Load or create JWT signing secret.
++
++        SECURITY: Create the secret file atomically with 0o600 permissions to
++        avoid any window where it may be world-readable between creation and
++        chmod.
++        """
+         JWT_SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
+ 
++        # If it already exists, read it and (best-effort) enforce strict perms.
+         if JWT_SECRET_FILE.exists():
++            try:
++                os.chmod(JWT_SECRET_FILE, 0o600)
++            except Exception:
++                pass
+             return JWT_SECRET_FILE.read_bytes()
+ 
+         secret = secrets.token_bytes(32)
+-        JWT_SECRET_FILE.write_bytes(secret)
+-        JWT_SECRET_FILE.chmod(0o600)  # Owner read/write only
++
++        # Atomic create: fails if another process created it concurrently.
++        try:
++            fd = os.open(
++                str(JWT_SECRET_FILE),
++                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
++                0o600,
++            )
++        except FileExistsError:
++            # Another process won the race.
++            try:
++                os.chmod(JWT_SECRET_FILE, 0o600)
++            except Exception:
++                pass
++            return JWT_SECRET_FILE.read_bytes()
++
++        try:
++            with os.fdopen(fd, "wb") as f:
++                f.write(secret)
++                f.flush()
++                os.fsync(f.fileno())
++        finally:
++            # fd is closed by fdopen context manager; this is just belt & suspenders.
++            try:
++                os.close(fd)
++            except Exception:
++                pass
++
+         return secret
+ 
+     def _witness(self, action: str, agent_address: str, data: dict):
+@@ -616,47 +699,77 @@ class AgentAuth:
+ 
+     def create_simple_token(self, name: str, telos: str = "") -> dict:
+         """
+-        Create a simple bearer token. No crypto required.
++        Create a simple bearer token.
++
++        SECURITY:
++        - The returned token is a bearer secret.
++        - We must NEVER store it in plaintext.
++        - We store sha256 for lookup + bcrypt for strong at-rest protection.
+ 
+         Returns:
+             {"token": "sab_t_...", "address": "...", "name": "...", "expires_at": "..."}
+         """
++        if not BCRYPT_AVAILABLE:
++            raise ImportError("bcrypt required for Tier-1 token hashing (pip install bcrypt)")
++
+         token = f"sab_t_{secrets.token_hex(24)}"
+-        address = f"t_{hashlib.sha256(token.encode()).hexdigest()[:14]}"
++        token_sha256 = hashlib.sha256(token.encode()).hexdigest()
++        token_bcrypt = bcrypt.hashpw(token.encode(), bcrypt.gensalt()).decode()
++
++        address = f"t_{token_sha256[:14]}"
+         now = datetime.now(timezone.utc)
+         expires_at = now + timedelta(hours=JWT_TTL_HOURS)
+ 
+         conn = sqlite3.connect(self.db_path)
+         try:
+             conn.execute(
+-                "INSERT INTO simple_tokens (token, address, name, telos, created_at, expires_at) VALUES (?,?,?,?,?,?)",
+-                (token, address, name, telos, now.isoformat(), expires_at.isoformat()),
++                "INSERT INTO simple_tokens (token_sha256, token_bcrypt, address, name, telos, created_at, expires_at) VALUES (?,?,?,?,?,?,?)",
++                (token_sha256, token_bcrypt, address, name, telos, now.isoformat(), expires_at.isoformat()),
+             )
+             conn.commit()
+         finally:
+             conn.close()
+ 
+         self._witness("simple_token_created", address, {"name": name})
+-        return {"token": token, "address": address, "name": name,
+-                "expires_at": expires_at.isoformat(), "auth_method": "token"}
++        return {
++            "token": token,
++            "address": address,
++            "name": name,
++            "expires_at": expires_at.isoformat(),
++            "auth_method": "token",
++        }
+ 
+     def verify_simple_token(self, token: str) -> Optional[dict]:
+         """Verify a simple token. Returns agent dict or None."""
+         if not token.startswith("sab_t_"):
+             return None
++        if not BCRYPT_AVAILABLE:
++            raise ImportError("bcrypt required for Tier-1 token verification (pip install bcrypt)")
++
++        token_sha256 = hashlib.sha256(token.encode()).hexdigest()
++
+         conn = sqlite3.connect(self.db_path)
+         try:
+             row = conn.execute(
+-                "SELECT address, name, telos, expires_at FROM simple_tokens WHERE token=?",
+-                (token,),
++                "SELECT token_bcrypt, address, name, telos, expires_at FROM simple_tokens WHERE token_sha256=?",
++                (token_sha256,),
+             ).fetchone()
+             if not row:
+                 return None
+-            address, name, telos, expires_at = row
++
++            token_bcrypt, address, name, telos, expires_at = row
++            if not bcrypt.checkpw(token.encode(), token_bcrypt.encode()):
++                return None
+             if datetime.fromisoformat(expires_at) < datetime.now(timezone.utc):
+                 return None
+-            return {"address": address, "name": name, "telos": telos,
+-                    "reputation": 0.0, "auth_method": "token"}
++
++            return {
++                "address": address,
++                "name": name,
++                "telos": telos,
++                "reputation": 0.0,
++                "auth_method": "token",
++            }
+         finally:
+             conn.close()
+ 
+diff --git a/agora/db.py b/agora/db.py
+index 0c78d6f..5161a78 100644
+--- a/agora/db.py
++++ b/agora/db.py
+@@ -61,10 +61,19 @@ class AgoraDB:
+         with self._conn() as conn:
+             cursor = conn.cursor()
+ 
++            WHITELISTED_TABLES = {"posts", "votes", "gate_evidence", "moderation_queue"}
++
+             def ensure_column(table: str, column_name: str, column_def: str) -> None:
++                if table not in WHITELISTED_TABLES:
++                    # Log an error or raise, but for now, just silently return to prevent injection
++                    print(f"WARNING: Attempted to call ensure_column with unwhitelisted table: {table}")
++                    return
++
+                 cursor.execute(f"PRAGMA table_info({table})")
+                 existing = {row[1] for row in cursor.fetchall()}
+                 if column_name not in existing:
++                    # column_def still needs to come from a trusted source or be thoroughly validated
++                    # before passing directly into an f-string in a real production system.
+                     cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
+ 
+             # Posts table (includes comments)
+diff --git a/agora/rate_limit.py b/agora/rate_limit.py
+index 1794c7c..4dfef65 100644
+--- a/agora/rate_limit.py
++++ b/agora/rate_limit.py
+@@ -1,68 +1,52 @@
++"""Simple in-memory rate limiting utilities.
++
++SECURITY NOTE:
++- This is best-effort protection for a single-process deployment.
++- For multi-worker / multi-instance deployments, replace with Redis or an edge proxy.
+ """
+-SAB Rate Limiter — sliding-window per-agent and per-IP.
+-"""
+-import sqlite3
++
++from __future__ import annotations
++
+ import time
+-from pathlib import Path
++from dataclasses import dataclass
++
++
++@dataclass
++class RateLimitResult:
++    allowed: bool
++    remaining: int
++    reset_in_seconds: int
+ 
+-from agora.config import (
+-    RATE_LIMIT_POSTS_PER_HOUR,
+-    RATE_LIMIT_COMMENTS_PER_HOUR,
+-    RATE_LIMIT_REQUESTS_PER_MINUTE,
+-)
+ 
++class InMemoryFixedWindowLimiter:
++    """Fixed-window counter limiter.
+ 
+-class RateLimiter:
+-    def __init__(self, db_path: Path):
+-        self.db_path = db_path
+-        self._init()
++    Good enough for /auth/challenge flood protection.
++    """
+ 
+-    def _init(self):
+-        conn = sqlite3.connect(self.db_path)
+-        conn.execute("""
+-            CREATE TABLE IF NOT EXISTS rate_events (
+-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+-                key TEXT NOT NULL,
+-                event_type TEXT NOT NULL,
+-                ts REAL NOT NULL
+-            )
+-        """)
+-        conn.execute("CREATE INDEX IF NOT EXISTS idx_re_key ON rate_events(key, event_type, ts)")
+-        conn.commit()
+-        conn.close()
++    def __init__(self, limit: int, window_seconds: int):
++        self.limit = int(limit)
++        self.window_seconds = int(window_seconds)
++        # key -> (window_start_epoch_seconds, count)
++        self._buckets: dict[str, tuple[int, int]] = {}
+ 
+-    def _count(self, key: str, event_type: str, window: float) -> int:
+-        cutoff = time.time() - window
+-        conn = sqlite3.connect(self.db_path)
+-        row = conn.execute(
+-            "SELECT COUNT(*) FROM rate_events WHERE key=? AND event_type=? AND ts>?",
+-            (key, event_type, cutoff),
+-        ).fetchone()
+-        conn.close()
+-        return row[0] if row else 0
++    def hit(self, key: str) -> RateLimitResult:
++        now = int(time.time())
++        window_start = now - (now % self.window_seconds)
+ 
+-    def record(self, key: str, event_type: str):
+-        conn = sqlite3.connect(self.db_path)
+-        conn.execute("INSERT INTO rate_events (key, event_type, ts) VALUES (?,?,?)",
+-                      (key, event_type, time.time()))
+-        conn.execute("DELETE FROM rate_events WHERE ts < ?", (time.time() - 86400,))
+-        conn.commit()
+-        conn.close()
++        cur_start, cur_count = self._buckets.get(key, (window_start, 0))
++        if cur_start != window_start:
++            cur_start, cur_count = window_start, 0
+ 
+-    def check_post(self, agent: str) -> dict:
+-        c = self._count(agent, "post", 3600)
+-        ok = c < RATE_LIMIT_POSTS_PER_HOUR
+-        return {"allowed": ok, "count": c, "limit": RATE_LIMIT_POSTS_PER_HOUR,
+-                "retry_after": 3600 if not ok else None}
++        cur_count += 1
++        self._buckets[key] = (cur_start, cur_count)
+ 
+-    def check_comment(self, agent: str) -> dict:
+-        c = self._count(agent, "comment", 3600)
+-        ok = c < RATE_LIMIT_COMMENTS_PER_HOUR
+-        return {"allowed": ok, "count": c, "limit": RATE_LIMIT_COMMENTS_PER_HOUR,
+-                "retry_after": 3600 if not ok else None}
++        remaining = max(0, self.limit - cur_count)
++        reset_in = (cur_start + self.window_seconds) - now
++        allowed = cur_count <= self.limit
+ 
+-    def check_ip(self, ip: str) -> dict:
+-        c = self._count(ip, "request", 60)
+-        ok = c < RATE_LIMIT_REQUESTS_PER_MINUTE
+-        return {"allowed": ok, "count": c, "limit": RATE_LIMIT_REQUESTS_PER_MINUTE,
+-                "retry_after": 60 if not ok else None}
++        return RateLimitResult(
++            allowed=allowed,
++            remaining=remaining,
++            reset_in_seconds=max(0, reset_in),
++        )
+diff --git a/dgm/genome.json b/dgm/genome.json
+index 5e658c1..96836d9 100644
+--- a/dgm/genome.json
++++ b/dgm/genome.json
+@@ -1,19 +1,19 @@
+ {
+   "gate_weights": {
+-    "satya": 1.5,
+-    "ahimsa": 1.0,
+-    "witness": 1.0,
+-    "substance": 0.8,
++    "satya": 2.6873832025284217,
++    "ahimsa": 0.4809730825874007,
++    "witness": 0.4131558890143231,
++    "substance": 0.24493320005641597,
+     "aparigraha": 0.7,
+     "brahmacharya": 0.6
+   },
+   "composite_weights": {
+-    "gates": 0.35,
+-    "depth": 0.45,
+-    "reputation": 0.20
++    "gates": 0.8935678439707151,
++    "depth": 0.10429988686619955,
++    "reputation": 0.002132269163085365
+   },
+   "thresholds": {
+     "min_quality": 0.65,
+     "silence_threshold": 0.4
+   }
+-}
++}
+\ No newline at end of file
+diff --git a/dgm/multi_model_voter.py b/dgm/multi_model_voter.py
+index 20ce910..bfe7d3a 100644
+--- a/dgm/multi_model_voter.py
++++ b/dgm/multi_model_voter.py
+@@ -1,11 +1,8 @@
+ #!/usr/bin/env python3
+-"""
+-DGC Multi-Model Voter — anekāntavāda in code.
+-Uses ONLY free APIs (NVIDIA NIM + OpenRouter free tier).
+-Each model scores content independently. Disagreement = signal.
+-"""
+-import json, os, time, requests
+-from typing import Dict, List, Optional
++"""Multi-Model Voter Script"""
++import json, os, time, requests, statistics
++from typing import Dict, List
++import sys
+ from pathlib import Path
+ 
+ # Load NVIDIA key from OpenClaw config
+@@ -19,7 +16,7 @@ def _load_nvidia_key():
+ NVIDIA_KEY = _load_nvidia_key()
+ NVIDIA_BASE = "https://integrate.api.nvidia.com/v1/chat/completions"
+ 
+-# Free models available on NVIDIA NIM
++# Available NVIDIA NIM Models
+ MODELS = {
+     "nemotron-ultra": "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+     "nemotron-super": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+@@ -30,7 +27,7 @@ MODELS = {
+     "qwen3-coder": "qwen/qwen3-coder-480b-a35b-instruct",
+     "glm-4.7": "z-ai/glm4.7",
+     "glm-5": "z-ai/glm5",
+-    "nemotron-nano": "nvidia/nemotron-nano-3-30b-a3b",
++    # "nemotron-nano": "nvidia/nemotron-nano-3-30b-a3b", # Removed: returned 404
+     "devstral": "mistralai/devstral-2-123b-instruct-2512",
+     "llama-405b": "meta/llama-3.1-405b-instruct",
+     "llama-70b": "meta/llama-3.3-70b-instruct",
+@@ -38,6 +35,9 @@ MODELS = {
+     "qwq-32b": "qwen/qwq-32b",
+ }
+ 
++# Fast, reliable models for Shakti Engine scoring (confirmed working)
++FAST_MODELS = ["llama-70b", "mistral-nemotron"]
++
+ SCORING_PROMPT = """You are evaluating content for a dharmic discussion platform.
+ Rate this content on a scale of 0.0 to 1.0 across these dimensions:
+ 
+@@ -46,7 +46,7 @@ Rate this content on a scale of 0.0 to 1.0 across these dimensions:
+ 3. DEPTH: Structural complexity, originality, references, insight
+ 4. ALIGNMENT: On-topic, relevant, coherent argument
+ 
+-Content to evaluate:
++Content:
+ ---
+ {content}
+ ---
+@@ -54,126 +54,184 @@ Content to evaluate:
+ Respond with ONLY valid JSON, no other text:
+ {{"truth": 0.X, "non_harm": 0.X, "depth": 0.X, "alignment": 0.X}}"""
+ 
++PRODUCT_SCORING_PROMPT = """You are a brutally honest product reviewer evaluating whether a digital product is worth buying.
++Rate this product on a scale of 0.0 to 1.0 across these dimensions:
++
++1. MARKET_VALUE: Would people pay the asking price? Are there free alternatives that cover 80%+ of this? Score LOW if generic, HIGH if unique.
++2. UNIQUENESS: Does this exist elsewhere? What's the moat?
++3. COMPLETENESS: Is it finished? Usable? Professional?
++4. CLARITY: Is the writing clear? Instructions followable?
++5. TRUST: Would you trust this author? Evidence of expertise?
++
++Product:
++---
++{content}
++---
++
++Respond with ONLY valid JSON:
++{{"market_value": 0.X, "uniqueness": 0.X, "completeness": 0.X, "clarity": 0.X, "trust": 0.X}}"""
++
++RISK_ASSESSMENT_PROMPT = """Assess risk on 0.0 (no risk) to 1.0 (extreme risk):
++1. TECHNICAL_RISK: Will this work? Dependencies? Complexity?
++2. MARKET_RISK: Is there demand? Competition? Timing?
++3. REPUTATION_RISK: Could this damage credibility?
++4. RESOURCE_RISK: Time/money/attention cost vs. payoff?
++
++Decision:
++---
++{content}
++---
++
++Respond with ONLY valid JSON:
++{{"technical_risk": 0.X, "market_risk": 0.X, "reputation_risk": 0.X, "resource_risk": 0.X}}"""
++
++HIRE_DECISION_PROMPT = """Evaluate this candidate/proposal on 0.0 to 1.0:
++1. COMPETENCE: Can they actually do the job? Evidence?
++2. FIT: Do they match the culture/needs?
++3. VALUE: Is the price/salary fair for what you get?
++4. RED_FLAGS: Any warning signs? (higher = more flags)
++
++Candidate/Proposal:
++---
++{content}
++---
++
++Respond with ONLY valid JSON:
++{{"competence": 0.X, "fit": 0.X, "value": 0.X, "red_flags": 0.X}}"""
++
+ 
+-def call_nvidia_nim(model_id: str, content: str, timeout: int = 60) -> Optional[Dict]:
+-    """Call a single NVIDIA NIM model. Returns scores dict or None on failure."""
++def _call_nim(model_id: str, content: str, prompt_template: str, timeout: int = 30) -> dict:
++    """Call a single NVIDIA NIM model, return parsed JSON or {}."""
++    if not NVIDIA_KEY:
++        return {}
++    prompt = prompt_template.format(content=content[:2500])
++    headers = {
++        "Authorization": f"Bearer {NVIDIA_KEY}",
++        "Content-Type": "application/json",
++    }
++    payload = {
++        "model": model_id,
++        "messages": [{"role": "user", "content": prompt}],
++        "temperature": 0.1,
++        "max_tokens": 200,
++    }
+     try:
+-        resp = requests.post(
+-            NVIDIA_BASE,
+-            headers={
+-                "Authorization": f"Bearer {NVIDIA_KEY}",
+-                "Content-Type": "application/json",
+-            },
+-            json={
+-                "model": model_id,
+-                "messages": [{"role": "user", "content": SCORING_PROMPT.format(content=content[:2000])}],
+-                "max_tokens": 100,
+-                "temperature": 0.1,
+-            },
+-            timeout=timeout,
+-        )
++        resp = requests.post(NVIDIA_BASE, headers=headers, json=payload, timeout=timeout)
++        if resp.status_code == 429:
++            return {"_rate_limit": True}
+         if resp.status_code != 200:
+-            return None
+-        
+-        data = resp.json()
+-        msg = data["choices"][0]["message"]
+-        # Handle reasoning models (content in reasoning_content, answer in content)
+-        text = msg.get("content") or ""
+-        if not text and msg.get("reasoning_content"):
+-            text = msg["reasoning_content"]
+-        text = text.strip()
+-        
+-        # Extract JSON from response (handle markdown wrapping)
+-        if "```" in text:
+-            text = text.split("```")[1].replace("json", "").strip()
+-        
+-        scores = json.loads(text)
+-        # Validate
+-        for key in ["truth", "non_harm", "depth", "alignment"]:
+-            if key not in scores:
+-                return None
+-            scores[key] = max(0.0, min(1.0, float(scores[key])))
+-        
+-        return scores
++            return {}
++        raw = resp.json()["choices"][0]["message"]["content"].strip()
++        # Strip <think>...</think> blocks (some models add reasoning)
++        import re
++        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
++        # Extract JSON from response (may have extra text)
++        start = raw.find("{")
++        end = raw.rfind("}") + 1
++        if start >= 0 and end > start:
++            return json.loads(raw[start:end])
++        return {}
+     except Exception as e:
+-        return None
++        return {}
+ 
+ 
+-def multi_model_vote(content: str, models: List[str] = None, min_voters: int = 2) -> Dict:
++def multi_model_vote(
++    content: str,
++    models: List[str] = None,
++    min_voters: int = 1,
++    prompt_template: str = None,
++    max_retries: int = 3,
++) -> dict:
+     """
+-    Score content using multiple free models.
+-    Returns aggregated scores + disagreement metrics.
++    Score content using multiple NVIDIA NIM models.
++
++    Args:
++        content: Text to score (truncated to 2500 chars internally)
++        models: List of model keys from MODELS dict (default: ["deepseek-v3", "qwen3-next"])
++        min_voters: Minimum models that must succeed (else return {})
++        prompt_template: Override default SCORING_PROMPT
++        max_retries: Max retries on rate limit
++
++    Returns:
++        {
++          "composite": float,           # weighted mean across all dimensions and models
++          "model_count": int,           # number of models that responded
++          "disagreement": float,        # mean std-dev across dimensions
++          "dimensions": {
++            "truth":     {"mean": float, "std": float, "votes": [float, ...]},
++            "non_harm":  {"mean": float, "std": float, "votes": [float, ...]},
++            "depth":     {"mean": float, "std": float, "votes": [float, ...]},
++            "alignment": {"mean": float, "std": float, "votes": [float, ...]},
++          },
++          "raw_votes": [{"model": str, "scores": dict}, ...]
++        }
++        Returns {} if fewer than min_voters succeed.
+     """
+     if models is None:
+-        # Default: use 3 non-reasoning models for speed
+-        models = ["deepseek-v3", "qwen3-next", "llama-70b"]
+-    
+-    votes = {}
+-    for model_name in models:
+-        model_id = MODELS.get(model_name)
+-        if not model_id:
+-            continue
+-        
+-        result = call_nvidia_nim(model_id, content)
+-        if result:
+-            votes[model_name] = result
+-        
+-        time.sleep(0.5)  # Rate limit respect
+-    
+-    if len(votes) < min_voters:
+-        return {"error": f"Only {len(votes)} models responded (need {min_voters})", "votes": votes}
+-    
+-    # Aggregate: mean + variance per dimension
+-    dimensions = ["truth", "non_harm", "depth", "alignment"]
+-    aggregated = {}
+-    
+-    for dim in dimensions:
+-        scores = [v[dim] for v in votes.values()]
+-        mean = sum(scores) / len(scores)
+-        variance = sum((s - mean) ** 2 for s in scores) / len(scores)
+-        aggregated[dim] = {
+-            "mean": round(mean, 4),
+-            "variance": round(variance, 4),
+-            "min": round(min(scores), 4),
+-            "max": round(max(scores), 4),
++        models = ["deepseek-v3", "qwen3-next"]
++    if prompt_template is None:
++        prompt_template = SCORING_PROMPT
++
++    EXPECTED_DIMS = ["truth", "non_harm", "depth", "alignment"]
++
++    raw_votes = []
++    rate_limited = 0
++
++    for model_key in models:
++        model_id = MODELS.get(model_key, model_key)
++        retries = 0
++        while retries <= max_retries:
++            result = _call_nim(model_id, content, prompt_template)
++            if result.get("_rate_limit"):
++                wait = 2 ** retries * 5  # 5, 10, 20s backoff
++                time.sleep(wait)
++                retries += 1
++                rate_limited += 1
++                continue
++            # Check we got expected dimensions
++            if all(d in result for d in EXPECTED_DIMS):
++                # Clamp values to [0, 1]
++                scores = {d: max(0.0, min(1.0, float(result[d]))) for d in EXPECTED_DIMS}
++                raw_votes.append({"model": model_key, "scores": scores})
++            break
++        # Small polite pause between models
++        time.sleep(0.5)
++
++    if len(raw_votes) < min_voters:
++        return {}
++
++    # Aggregate per dimension
++    dimensions = {}
++    for dim in EXPECTED_DIMS:
++        votes = [v["scores"][dim] for v in raw_votes]
++        dimensions[dim] = {
++            "mean": statistics.mean(votes),
++            "std": statistics.stdev(votes) if len(votes) > 1 else 0.0,
++            "votes": votes,
+         }
+-    
+-    # Composite score
+-    composite = sum(aggregated[d]["mean"] for d in dimensions) / len(dimensions)
+-    
+-    # Overall disagreement (mean variance across dimensions)
+-    disagreement = sum(aggregated[d]["variance"] for d in dimensions) / len(dimensions)
+-    
++
++    # Composite = mean of all dimension means (equal weighting baseline)
++    composite = statistics.mean(d["mean"] for d in dimensions.values())
++
++    # Disagreement = mean of std-devs
++    disagreement = statistics.mean(d["std"] for d in dimensions.values())
++
+     return {
+-        "composite": round(composite, 4),
+-        "disagreement": round(disagreement, 4),
+-        "flag_for_review": disagreement > 0.05,  # High disagreement = boundary case
+-        "dimensions": aggregated,
+-        "individual_votes": votes,
+-        "model_count": len(votes),
++        "composite": composite,
++        "model_count": len(raw_votes),
++        "disagreement": disagreement,
++        "dimensions": dimensions,
++        "raw_votes": raw_votes,
+     }
+ 
+ 
+ if __name__ == "__main__":
+-    # Quick test
+-    print("Testing multi-model voter with NVIDIA NIM...")
+-    
+-    # Test 1: High quality content
+-    good = """The R_V contraction metric shows measurable structural changes in transformer 
+-    architectures during recursive self-observation. Cohen's d ranges from -3.56 to -4.51, 
+-    suggesting systematic geometric compression. Building on Hofstadter (1979) and extending 
+-    to computational substrates."""
+-    
+-    print("\n=== HIGH QUALITY ===")
+-    result = multi_model_vote(good, models=["nemotron-ultra", "deepseek-v3"])
+-    print(json.dumps(result, indent=2))
+-    
+-    # Test 2: Low quality
+-    bad = "lol AI is dumb trust me bro just vibes"
+-    
+-    print("\n=== LOW QUALITY ===")
+-    result2 = multi_model_vote(bad, models=["nemotron-ultra", "deepseek-v3"])
+-    print(json.dumps(result2, indent=2))
+-    
+-    if "composite" in result and "composite" in result2:
+-        print(f"\nSEPARATION: {result['composite'] - result2['composite']:.4f}")
++    import argparse
++    parser = argparse.ArgumentParser(description="Multi-Model NIM Voter")
++    parser.add_argument("content", nargs="?", default="Test content for scoring.")
++    parser.add_argument("--models", default="deepseek-v3,qwen3-next")
++    args = parser.parse_args()
++
++    models = [m.strip() for m in args.models.split(",")]
++    result = multi_model_vote(args.content, models=models)
++    print(json.dumps(result, indent=2))
+\ No newline at end of file
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 32259de..048709c 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -1,11 +1,26 @@
+ version: '3.8'
+ 
++# DHARMIC_AGORA — Production Docker Compose
++# Profiles:
++#   (default)   : sab-api only
++#   monitoring  : + Prometheus + Grafana
++#
++# Usage:
++#   docker compose up -d                                   # API only
++#   docker compose --profile monitoring up -d              # API + Prometheus + Grafana
++#   docker compose --profile monitoring logs -f            # tail all logs
++
+ services:
++  # ─────────────────────────────────────────────────────────
++  # Core API service — FastAPI / uvicorn
++  # ─────────────────────────────────────────────────────────
+   sab-api:
+-    build: .
++    build:
++      context: .
++      dockerfile: Dockerfile
+     container_name: sab_api
+     ports:
+-      - "8000:8000"
++      - "127.0.0.1:8000:8000"   # bind to loopback only; Caddy proxies HTTPS
+     volumes:
+       - ./data:/app/data
+       - ./logs:/app/logs
+@@ -13,6 +28,11 @@ services:
+       - SAB_DB_PATH=/app/data/agora.db
+       - SAB_JWT_SECRET=${SAB_JWT_SECRET}
+       - SAB_ADMIN_ALLOWLIST=${SAB_ADMIN_ALLOWLIST:-}
++      - SAB_LOG_LEVEL=${SAB_LOG_LEVEL:-INFO}
++      - SAB_LOG_FILE=/app/logs/sab.log
++      - SAB_ENABLE_METRICS=true
++      - SAB_OTEL_ENABLED=${SAB_OTEL_ENABLED:-false}
++      - SAB_OTEL_SERVICE_NAME=sab-api
+     env_file:
+       - .env
+     restart: unless-stopped
+@@ -24,31 +44,79 @@ services:
+       start_period: 40s
+     networks:
+       - sab-network
++    logging:
++      driver: "json-file"
++      options:
++        max-size: "50m"
++        max-file: "5"
+ 
+-  caddy:
+-    image: caddy:2-alpine
+-    container_name: sab_caddy
++  # ─────────────────────────────────────────────────────────
++  # Prometheus — metrics collection (monitoring profile)
++  # ─────────────────────────────────────────────────────────
++  prometheus:
++    image: prom/prometheus:v2.51.2
++    container_name: sab_prometheus
++    profiles:
++      - monitoring
++    command:
++      - '--config.file=/etc/prometheus/prometheus.yml'
++      - '--storage.tsdb.path=/prometheus'
++      - '--storage.tsdb.retention.time=15d'
++      - '--web.enable-lifecycle'
++      - '--web.enable-admin-api'
+     ports:
+-      - "80:80"
+-      - "443:443"
+-      - "443:443/udp"  # HTTP/3
++      - "127.0.0.1:9090:9090"   # loopback only; access via SSH tunnel or Caddy
+     volumes:
+-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+-      - caddy_data:/data
+-      - caddy_config:/config
+-    environment:
+-      - SAB_DOMAIN=${SAB_DOMAIN:-sab.openclaw.ai}
++      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
++      - prometheus_data:/prometheus
+     restart: unless-stopped
+     depends_on:
+       sab-api:
+         condition: service_healthy
+     networks:
+       - sab-network
++    logging:
++      driver: "json-file"
++      options:
++        max-size: "20m"
++        max-file: "3"
++
++  # ─────────────────────────────────────────────────────────
++  # Grafana — dashboards (monitoring profile)
++  # ─────────────────────────────────────────────────────────
++  grafana:
++    image: grafana/grafana:10.4.2
++    container_name: sab_grafana
++    profiles:
++      - monitoring
++    ports:
++      - "127.0.0.1:3000:3000"   # loopback only
++    environment:
++      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
++      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-dharmic_admin_2026}
++      - GF_USERS_ALLOW_SIGN_UP=false
++      - GF_SERVER_ROOT_URL=https://157.245.193.15/grafana/
++      - GF_SERVER_SERVE_FROM_SUB_PATH=true
++      - GF_ANALYTICS_REPORTING_ENABLED=false
++      - GF_LOG_LEVEL=warn
++    volumes:
++      - grafana_data:/var/lib/grafana
++      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
++    restart: unless-stopped
++    depends_on:
++      - prometheus
++    networks:
++      - sab-network
++    logging:
++      driver: "json-file"
++      options:
++        max-size: "20m"
++        max-file: "3"
+ 
+ networks:
+   sab-network:
+     driver: bridge
+ 
+ volumes:
+-  caddy_data:
+-  caddy_config:
++  prometheus_data:
++  grafana_data:
+diff --git a/requirements.txt b/requirements.txt
+index 371aa08..b36f362 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -21,3 +21,6 @@ opentelemetry-sdk>=1.24.0
+ opentelemetry-instrumentation-fastapi>=0.45b0
+ opentelemetry-instrumentation-logging>=0.45b0
+ opentelemetry-exporter-otlp>=1.24.0
++
++# Prometheus metrics
++prometheus-fastapi-instrumentator>=6.1.0
+diff --git a/scripts/deploy.sh b/scripts/deploy.sh
+index 65e6f79..dc55509 100755
+--- a/scripts/deploy.sh
++++ b/scripts/deploy.sh
+@@ -45,7 +45,7 @@ fi
+ 
+ echo ""
+ echo "🏗️  Step 2/5: Building containers..."
+-docker compose build --no-cache
++docker-compose build
+ 
+ echo ""
+ echo "🗄️  Step 3/5: Running migrations (if any)..."
+@@ -55,8 +55,8 @@ echo "SQLite auto-migrates on startup - skipping explicit migrations"
+ 
+ echo ""
+ echo "⬆️  Step 4/5: Starting services..."
+-docker compose down
+-docker compose up -d
++docker-compose down
++docker-compose up -d
+ 
+ echo ""
+ echo "🏥 Step 5/5: Health check..."
+@@ -66,7 +66,7 @@ echo "Waiting for services to be healthy..."
+ MAX_WAIT=60
+ WAIT_COUNT=0
+ while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
+-    if docker compose ps | grep -q "sab_api.*healthy"; then
++    if docker-compose ps | grep -q "sab_api.*healthy"; then
+         echo -e "${GREEN}✅ sab-api is healthy${NC}"
+         break
+     fi
+@@ -78,7 +78,7 @@ done
+ if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
+     echo -e "${RED}❌ Health check timeout!${NC}"
+     echo "Container logs:"
+-    docker compose logs sab-api
++    docker-compose logs sab-api
+     exit 1
+ fi
+ 
+@@ -94,15 +94,15 @@ fi
+ echo ""
+ echo "📊 Deployment Status:"
+ echo "===================="
+-docker compose ps
++docker-compose ps
+ 
+ echo ""
+ echo -e "${GREEN}✅ Deployment complete!${NC}"
+ echo ""
+ echo "📝 Next steps:"
+-echo "  • Check logs: docker compose logs -f"
+-echo "  • Stop services: docker compose down"
+-echo "  • View status: docker compose ps"
++echo "  • Check logs: docker-compose logs -f"
++echo "  • Stop services: docker-compose down"
++echo "  • View status: docker-compose ps"
+ echo ""
+ echo "🌐 Endpoints:"
+ echo "  • API (local): http://localhost:8000"
