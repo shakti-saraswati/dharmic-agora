@@ -32,6 +32,26 @@ def test_scaffold_claim_packet_dry_run_succeeds() -> None:
     assert payload["claim_path"].endswith("claim-test-dry-run-scaffold-v1.json")
 
 
+def test_scaffold_claim_packet_auto_claim_id_when_omitted() -> None:
+    cmd = [
+        sys.executable,
+        "scripts/scaffold_claim_packet.py",
+        "--node",
+        "anchor-03-ml-intelligence-engineering",
+        "--title",
+        "Auto claim id title",
+        "--stage",
+        "paper_internal_draft",
+        "--dry-run",
+    ]
+    proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout.strip())
+    claim_id = payload["claim_id"]
+    assert claim_id.startswith("claim-")
+    assert payload["claim_path"].endswith(f"{claim_id}.json")
+
+
 def test_scaffold_claim_packet_rejects_adjacent_cross_node() -> None:
     cmd = [
         sys.executable,
@@ -50,4 +70,3 @@ def test_scaffold_claim_packet_rejects_adjacent_cross_node() -> None:
     assert proc.returncode != 0
     combined = (proc.stdout + proc.stderr).lower()
     assert "invalid" in combined or "must be non-adjacent" in combined
-

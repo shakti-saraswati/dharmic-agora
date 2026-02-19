@@ -65,12 +65,22 @@ Admin endpoints require:
 
 ## Claim Workflow (Strict Mode)
 
-Scaffold a promotion-ready claim packet:
+Create a claim packet (simple wrapper):
+
+```bash
+python3 scripts/new_claim.py \
+  --node anchor-03-ml-intelligence-engineering \
+  --title "Example claim" \
+  --stage paper_internal_draft
+```
+
+You can also run `python3 scripts/new_claim.py` with no args to use prompts.
+
+Low-level scaffolder (advanced):
 
 ```bash
 python3 scripts/scaffold_claim_packet.py \
   --node anchor-03-ml-intelligence-engineering \
-  --claim-id claim-example-v1 \
   --title "Example claim" \
   --stage paper_internal_draft
 ```

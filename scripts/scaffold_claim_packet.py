@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List
@@ -55,6 +56,18 @@ def _write_text(path: Path, content: str, force: bool, dry_run: bool) -> None:
 
 def _write_json(path: Path, payload: Dict[str, Any], force: bool, dry_run: bool) -> None:
     _write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n", force=force, dry_run=dry_run)
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.strip().lower())
+    slug = re.sub(r"-{2,}", "-", slug).strip("-")
+    return slug or "untitled"
+
+
+def _derive_claim_id(node_id: str, title: str, now: datetime) -> str:
+    node_slug = node_id.replace("anchor-", "a").replace("_", "-")
+    title_slug = _slugify(title)[:48]
+    return f"claim-{node_slug}-{title_slug}-{now.strftime('%Y%m%d%H%M%S')}-v1"
 
 
 def _default_lane_for_stage(stage: str) -> str:
@@ -223,7 +236,7 @@ def _build_witness_packets(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Scaffold a promotion-ready claim packet with support files.")
     parser.add_argument("--node", required=True, help="Node id, e.g. anchor-03-ml-intelligence-engineering")
-    parser.add_argument("--claim-id", required=True, help="Unique claim id")
+    parser.add_argument("--claim-id", default="", help="Unique claim id (auto-generated when omitted)")
     parser.add_argument("--title", required=True, help="Claim title")
     parser.add_argument("--summary", default="", help="Optional claim summary")
     parser.add_argument(
@@ -262,18 +275,19 @@ def main() -> int:
 
     now = datetime.now(timezone.utc)
     created_at = _iso(now)
-    proposal_hash = hashlib.sha256(f"{args.claim_id}:{created_at}".encode("utf-8")).hexdigest()
+    claim_id = args.claim_id.strip() or _derive_claim_id(args.node, args.title, now)
+    proposal_hash = hashlib.sha256(f"{claim_id}:{created_at}".encode("utf-8")).hexdigest()
 
     cross_nodes = _resolve_cross_nodes(args.node, args.cross_node)
     support_refs = _create_stub_files(
         stage=args.stage,
         claim_dir=claims_dir,
-        claim_id=args.claim_id,
+        claim_id=claim_id,
         force=args.force,
         dry_run=args.dry_run,
     )
     cross_node_refs = _build_witness_packets(
-        claim_id=args.claim_id,
+        claim_id=claim_id,
         node_id=args.node,
         cross_nodes=cross_nodes,
         force=args.force,
@@ -288,7 +302,7 @@ def main() -> int:
     cooldown_until = _iso(now - timedelta(days=1))
 
     claim: Dict[str, Any] = {
-        "claim_id": args.claim_id,
+        "claim_id": claim_id,
         "node_id": args.node,
         "title": args.title,
         "lane": lane,
@@ -315,12 +329,13 @@ def main() -> int:
         "updated_at": created_at,
     }
 
-    claim_path = claims_dir / f"{args.claim_id}.json"
+    claim_path = claims_dir / f"{claim_id}.json"
     _write_json(claim_path, claim, force=args.force, dry_run=args.dry_run)
 
     result = {
         "status": "ok",
         "dry_run": bool(args.dry_run),
+        "claim_id": claim_id,
         "claim_path": str(claim_path.relative_to(REPO_ROOT)),
         "requested_stage": args.stage,
         "cross_nodes": cross_nodes,
@@ -335,4 +350,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

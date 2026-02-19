@@ -137,6 +137,7 @@ Naming note:
 - `agora/claim_promotion.py`: repo-wide promotion enforcement scanner for claim packets
 - `scripts/enforce_claim_promotions.py`: CI/release gate for requested-stage promotions
 - `scripts/scaffold_claim_packet.py`: scaffold promotion-ready claim + witness/red-team files
+- `scripts/new_claim.py`: simplified claim creator (wrapper with optional prompts)
 
 ### `site/` (public field surface)
 
