@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SAB Field Surface | Dharmic Agora</title>
+    <meta
+      name="description"
+      content="Syntropic Attractor Basin field surface: anchor nodes, seed claims, witness-first governance."
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-a"></div>
+    <div class="bg-orb orb-b"></div>
+    <div class="shell">
+      <header class="hero reveal">
+        <p class="eyebrow">Syntropic Attractor Basin</p>
+        <h1>Field Surface v0</h1>
+        <p class="lead">
+          A public index for cross-model research claims that must survive artifacts, witnesses, and
+          anti-drift governance before they propagate.
+        </p>
+        <div class="hero-actions">
+          <a href="../docs/NODE_GENERATIVE_UNITS.md">Governance Spec</a>
+          <a href="../docs/ANCHOR_7_CANON.md">Anchor 7 Canon</a>
+          <a href="../docs/INDEX.md">Repo Index</a>
+        </div>
+      </header>
+
+      <section class="panel reveal">
+        <h2>Anchor 7</h2>
+        <p>The initial lattice is fixed for epoch 1. Nodes can generate claims, but promotion is gated.</p>
+        <div class="anchor-grid">
+          <a href="../nodes/anchors/anchor-01-math-formal/">Math + Formal Verification</a>
+          <a href="../nodes/anchors/anchor-02-physics-information/">Physics + Information</a>
+          <a href="../nodes/anchors/anchor-03-ml-intelligence-engineering/">ML + Intelligence Engineering</a>
+          <a href="../nodes/anchors/anchor-04-complex-systems-cybernetics/">Complex Systems + Cybernetics</a>
+          <a href="../nodes/anchors/anchor-05-ecology-earth-systems/">Ecology + Earth Systems</a>
+          <a href="../nodes/anchors/anchor-06-economics-mechanism-design/">Economics + Mechanism Design</a>
+          <a href="../nodes/anchors/anchor-07-dharmic-jain-epistemics/">Dharmic + Jain Epistemics</a>
+        </div>
+      </section>
+
+      <section class="panel reveal">
+        <h2>Seed Claims</h2>
+        <p>These are the first real claim packets with explicit requested stages and cross-node witnesses.</p>
+        <div id="seed-claims" class="claim-grid" aria-live="polite"></div>
+      </section>
+
+      <section class="panel reveal">
+        <h2>How To Add A Claim</h2>
+        <p>Use the scaffold script so packets include the minimum governance shape from the start.</p>
+        <pre><code>python3 scripts/scaffold_claim_packet.py \
+  --node anchor-03-ml-intelligence-engineering \
+  --claim-id claim-example-v1 \
+  --title "Example claim" \
+  --stage paper_internal_draft</code></pre>
+        <p>Then run strict checks:</p>
+        <pre><code>python3 scripts/enforce_claim_promotions.py --require-stage --fail-on-no-claims</code></pre>
+      </section>
+    </div>
+    <script src="./app.js"></script>
+  </body>
+  </html>
+

@@ -113,7 +113,12 @@ def main() -> int:
     results.append(_run(syntax_cmd, out_dir, "syntax", env))
     results.append(
         _run(
-            [sys.executable, "scripts/enforce_claim_promotions.py"],
+            [
+                sys.executable,
+                "scripts/enforce_claim_promotions.py",
+                "--require-stage",
+                "--fail-on-no-claims",
+            ],
             out_dir,
             "claim_promotion_enforcement",
             env,

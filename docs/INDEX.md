@@ -136,6 +136,13 @@ Naming note:
 - `scripts/validate_claim_packet.py`: CLI validator for claim promotion readiness
 - `agora/claim_promotion.py`: repo-wide promotion enforcement scanner for claim packets
 - `scripts/enforce_claim_promotions.py`: CI/release gate for requested-stage promotions
+- `scripts/scaffold_claim_packet.py`: scaffold promotion-ready claim + witness/red-team files
+
+### `site/` (public field surface)
+
+- `site/index.html`: first public SAB surface (Anchor 7 + seed claims)
+- `site/data/seed_claims.json`: surfaced claim index
+- `site/styles.css`, `site/app.js`: static UI and claim rendering
 
 ---
 

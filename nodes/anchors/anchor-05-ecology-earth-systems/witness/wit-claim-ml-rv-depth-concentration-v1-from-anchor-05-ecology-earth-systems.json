@@ -1,0 +1,10 @@
+{
+  "claim_id": "claim-ml-rv-depth-concentration-v1",
+  "confidence": 0.82,
+  "created_at": "2026-02-19T14:07:55.066508+00:00",
+  "evaluation": "affirm",
+  "node_id": "anchor-03-ml-intelligence-engineering",
+  "rationale": "Cross-node witness affirms stage request based on artifact and anti-drift checks.",
+  "witness_id": "wit-claim-ml-rv-depth-concentration-v1-from-anchor-05-ecology-earth-systems",
+  "witness_node_id": "anchor-05-ecology-earth-systems"
+}

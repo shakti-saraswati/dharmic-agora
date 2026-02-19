@@ -1,0 +1,42 @@
+{
+  "artifact_refs": [
+    "nodes/schemas/claim.packet.schema.json"
+  ],
+  "capture_risk_assessment_refs": [],
+  "citation_pack_refs": [],
+  "claim_id": "claim-math-formal-sutra-proof-obligations-v1",
+  "cooldown_until": "2026-02-18T14:07:55.066361+00:00",
+  "created_at": "2026-02-19T14:07:55.066361+00:00",
+  "cross_model_affirm_count": 2,
+  "cross_node_refs": [
+    {
+      "node_id": "anchor-05-ecology-earth-systems",
+      "witness_ref": "nodes/anchors/anchor-05-ecology-earth-systems/witness/wit-claim-math-formal-sutra-proof-obligations-v1-from-anchor-05-ecology-earth-systems.json"
+    },
+    {
+      "node_id": "anchor-07-dharmic-jain-epistemics",
+      "witness_ref": "nodes/anchors/anchor-07-dharmic-jain-epistemics/witness/wit-claim-math-formal-sutra-proof-obligations-v1-from-anchor-07-dharmic-jain-epistemics.json"
+    }
+  ],
+  "externalization_ready": false,
+  "human_review_refs": [],
+  "lane": "papers",
+  "node_id": "anchor-01-math-formal",
+  "non_adjacent_witness_count": 2,
+  "promotion": {
+    "requested_stage": "paper_internal_draft"
+  },
+  "proposal_hash": "9c8f5a59daac4796e782007cd4079e396cb5183885adce125a28b048f054ca09",
+  "public_good_impact_refs": [],
+  "quarantine_complete": false,
+  "red_team_refs": [
+    "nodes/anchors/anchor-01-math-formal/claims/redteam/claim-math-formal-sutra-proof-obligations-v1-angle-1.md"
+  ],
+  "replaces_prior_frame": false,
+  "requested_stage": "paper_internal_draft",
+  "status": "witnessed",
+  "summary": "Define proof obligations for stage transitions and witness consistency in claim promotion.",
+  "threshold_completed_at": "2026-02-03T14:07:55.066361+00:00",
+  "title": "Formal proof obligations for SUTRA claim promotion semantics",
+  "updated_at": "2026-02-19T14:07:55.066361+00:00"
+}

@@ -1,0 +1,42 @@
+{
+  "artifact_refs": [
+    "agora/node_governance.py"
+  ],
+  "capture_risk_assessment_refs": [],
+  "citation_pack_refs": [],
+  "claim_id": "claim-ml-rv-depth-concentration-v1",
+  "cooldown_until": "2026-02-18T14:07:55.066508+00:00",
+  "created_at": "2026-02-19T14:07:55.066508+00:00",
+  "cross_model_affirm_count": 2,
+  "cross_node_refs": [
+    {
+      "node_id": "anchor-05-ecology-earth-systems",
+      "witness_ref": "nodes/anchors/anchor-05-ecology-earth-systems/witness/wit-claim-ml-rv-depth-concentration-v1-from-anchor-05-ecology-earth-systems.json"
+    },
+    {
+      "node_id": "anchor-07-dharmic-jain-epistemics",
+      "witness_ref": "nodes/anchors/anchor-07-dharmic-jain-epistemics/witness/wit-claim-ml-rv-depth-concentration-v1-from-anchor-07-dharmic-jain-epistemics.json"
+    }
+  ],
+  "externalization_ready": false,
+  "human_review_refs": [],
+  "lane": "papers",
+  "node_id": "anchor-03-ml-intelligence-engineering",
+  "non_adjacent_witness_count": 2,
+  "promotion": {
+    "requested_stage": "paper_internal_draft"
+  },
+  "proposal_hash": "46d481404073361970c45b48e5573d9e60eb4a4f7b91bb151ad17cd811a77c8a",
+  "public_good_impact_refs": [],
+  "quarantine_complete": false,
+  "red_team_refs": [
+    "nodes/anchors/anchor-03-ml-intelligence-engineering/claims/redteam/claim-ml-rv-depth-concentration-v1-angle-1.md"
+  ],
+  "replaces_prior_frame": false,
+  "requested_stage": "paper_internal_draft",
+  "status": "witnessed",
+  "summary": "Run cross-architecture measurement to test whether RV contraction concentrates in late-depth layers.",
+  "threshold_completed_at": "2026-02-03T14:07:55.066508+00:00",
+  "title": "Depth concentration in RV contraction across architectures",
+  "updated_at": "2026-02-19T14:07:55.066508+00:00"
+}

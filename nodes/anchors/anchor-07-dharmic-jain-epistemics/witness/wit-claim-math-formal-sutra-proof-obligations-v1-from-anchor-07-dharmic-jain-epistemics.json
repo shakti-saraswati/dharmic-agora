@@ -1,0 +1,10 @@
+{
+  "claim_id": "claim-math-formal-sutra-proof-obligations-v1",
+  "confidence": 0.82,
+  "created_at": "2026-02-19T14:07:55.066361+00:00",
+  "evaluation": "affirm",
+  "node_id": "anchor-01-math-formal",
+  "rationale": "Cross-node witness affirms stage request based on artifact and anti-drift checks.",
+  "witness_id": "wit-claim-math-formal-sutra-proof-obligations-v1-from-anchor-07-dharmic-jain-epistemics",
+  "witness_node_id": "anchor-07-dharmic-jain-epistemics"
+}

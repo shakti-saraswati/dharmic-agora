@@ -99,6 +99,7 @@ Promotion requests are explicit claim metadata, not inferred state:
 - set `requested_stage` (or `requested_stages`) in claim packets
 - optional nested form: `promotion.requested_stage(s)`
 - CI/release validation enforces thresholds for any requested promotion
+- scaffold helper: `python3 scripts/scaffold_claim_packet.py --node ... --claim-id ... --title ...`
 
 - Paper draft trigger:
   - >=2 cross-model affirm witnesses

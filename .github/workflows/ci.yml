@@ -33,7 +33,7 @@ jobs:
 
     - name: Enforce claim promotion thresholds
       run: |
-        python3 scripts/enforce_claim_promotions.py
+        python3 scripts/enforce_claim_promotions.py --require-stage --fail-on-no-claims
 
     - name: Shadow loop runtime check
       run: |

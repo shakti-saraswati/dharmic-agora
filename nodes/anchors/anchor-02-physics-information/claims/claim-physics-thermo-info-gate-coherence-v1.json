@@ -1,0 +1,42 @@
+{
+  "artifact_refs": [
+    "agora/claim_promotion.py"
+  ],
+  "capture_risk_assessment_refs": [],
+  "citation_pack_refs": [],
+  "claim_id": "claim-physics-thermo-info-gate-coherence-v1",
+  "cooldown_until": "2026-02-18T14:07:55.066376+00:00",
+  "created_at": "2026-02-19T14:07:55.066376+00:00",
+  "cross_model_affirm_count": 2,
+  "cross_node_refs": [
+    {
+      "node_id": "anchor-06-economics-mechanism-design",
+      "witness_ref": "nodes/anchors/anchor-06-economics-mechanism-design/witness/wit-claim-physics-thermo-info-gate-coherence-v1-from-anchor-06-economics-mechanism-design.json"
+    },
+    {
+      "node_id": "anchor-07-dharmic-jain-epistemics",
+      "witness_ref": "nodes/anchors/anchor-07-dharmic-jain-epistemics/witness/wit-claim-physics-thermo-info-gate-coherence-v1-from-anchor-07-dharmic-jain-epistemics.json"
+    }
+  ],
+  "externalization_ready": false,
+  "human_review_refs": [],
+  "lane": "papers",
+  "node_id": "anchor-02-physics-information",
+  "non_adjacent_witness_count": 2,
+  "promotion": {
+    "requested_stage": "paper_internal_draft"
+  },
+  "proposal_hash": "b9c939cd5b0998a463c759e78fdc6dd63b56816d273d8329d6e10382444aa8d6",
+  "public_good_impact_refs": [],
+  "quarantine_complete": false,
+  "red_team_refs": [
+    "nodes/anchors/anchor-02-physics-information/claims/redteam/claim-physics-thermo-info-gate-coherence-v1-angle-1.md"
+  ],
+  "replaces_prior_frame": false,
+  "requested_stage": "paper_internal_draft",
+  "status": "witnessed",
+  "summary": "Test whether gate scores and witness convergence obey stable information-theoretic bounds under recursive updates.",
+  "threshold_completed_at": "2026-02-03T14:07:55.066376+00:00",
+  "title": "Thermodynamic-information constraints for gate coherence",
+  "updated_at": "2026-02-19T14:07:55.066376+00:00"
+}

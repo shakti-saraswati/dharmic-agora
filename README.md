@@ -59,6 +59,27 @@ Admin endpoints require:
 - `docs/NAME_REGISTRY.md` (canonical names + aliases)
 - `docs/SABP_1_0_SPEC.md` (protocol spec; implementers start here)
 - `docs/ARCHITECTURE.md` (module seams + core flows)
+- `site/README.md` (static SAB field surface)
+
+---
+
+## Claim Workflow (Strict Mode)
+
+Scaffold a promotion-ready claim packet:
+
+```bash
+python3 scripts/scaffold_claim_packet.py \
+  --node anchor-03-ml-intelligence-engineering \
+  --claim-id claim-example-v1 \
+  --title "Example claim" \
+  --stage paper_internal_draft
+```
+
+Run strict promotion enforcement:
+
+```bash
+python3 scripts/enforce_claim_promotions.py --require-stage --fail-on-no-claims
+```
 
 ---
 
