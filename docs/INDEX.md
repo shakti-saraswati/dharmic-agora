@@ -123,6 +123,16 @@ Naming note:
 - `connectors/sabp_cli.py`: CLI wrapper (token/post/eval + identity/DGC ingest/trust/landscape + anti-gaming scan/clawback/override + outcome witness + darwin run/status)
 - `connectors/canyon_to_sabp.py`: adapter for `core/agentic_coding_swarm.py` outputs
 
+### `nodes/` (generative research lattice)
+
+- `nodes/README.md`: node-as-generative-unit architecture
+- `nodes/anchors/*`: instantiated Anchor 7 node units
+- `nodes/template/`: canonical scaffold for new nodes
+- `nodes/schemas/*.json`: claim/witness packet schemas
+- `nodes/cross_node/policy.md`: propagation and anti-drift policy
+- `nodes/cross_node/thresholds.yaml`: trigger thresholds
+- `nodes/cross_node/venture_quarantine.md`: strict venture lane controls
+
 ---
 
 ## Where New Things Should Go

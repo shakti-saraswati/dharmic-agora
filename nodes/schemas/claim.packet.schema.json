@@ -16,10 +16,16 @@
     "claim_id": { "type": "string", "minLength": 3 },
     "node_id": { "type": "string", "minLength": 3 },
     "title": { "type": "string", "minLength": 5 },
+    "lane": {
+      "type": "string",
+      "enum": ["dialogue", "papers", "code", "site", "venture", "witness", "claims", "runs", "artifacts"]
+    },
     "status": {
       "type": "string",
       "enum": ["proposal", "experimenting", "artifacted", "witnessed", "sublated", "rejected"]
     },
+    "cross_model_affirm_count": { "type": "integer", "minimum": 0 },
+    "non_adjacent_witness_count": { "type": "integer", "minimum": 0 },
     "proposal_hash": { "type": "string", "minLength": 16 },
     "summary": { "type": "string" },
     "artifact_refs": {
@@ -41,6 +47,20 @@
         }
       }
     },
+    "red_team_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "human_review_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "citation_pack_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "cooldown_until": { "type": "string" },
+    "externalization_ready": { "type": "boolean" },
     "created_at": { "type": "string" },
     "updated_at": { "type": "string" }
   }

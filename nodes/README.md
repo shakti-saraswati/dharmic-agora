@@ -16,6 +16,8 @@ A node has concurrent lanes:
 Global coordination:
 - `nodes/schemas/`: canonical JSON schemas for claims/witness packets
 - `nodes/cross_node/`: cross-node witness rules and non-adjacent pair map
+- `nodes/cross_node/thresholds.yaml`: machine-readable trigger thresholds
+- `nodes/cross_node/venture_quarantine.md`: stricter venture lane controls
 - `nodes/template/`: bootstrap template for new nodes
 - `nodes/anchors/`: instantiated Anchor 7 nodes
 

@@ -1,0 +1,32 @@
+epoch: "2026"
+version: "v1"
+
+paper:
+  internal_draft_trigger:
+    cross_model_affirm_min: 2
+    non_adjacent_witness_min: 1
+    reproducible_artifact_min: 1
+    red_team_memo_min: 1
+  external_submission_trigger:
+    require_internal_draft_trigger: true
+    human_review_min: 1
+
+canon:
+  propagation_trigger:
+    non_adjacent_witness_min: 2
+    reproducible_artifact_min: 1
+    citation_pack_required: true
+    sublation_required_when_replacing_prior_frame: true
+    cooldown_days_min: 7
+
+venture:
+  proposal_gate:
+    reproducible_artifact_min: 1
+    non_adjacent_witness_min: 2
+    red_team_memo_min: 2
+    human_review_min: 1
+  quarantine:
+    cooldown_days_min: 14
+    external_release_requires_quarantine_complete: true
+    mandatory_capture_risk_assessment: true
+    mandatory_public_good_impact_assessment: true
