@@ -34,6 +34,7 @@ try:
     from agora.moderation import ModerationStore
     from agora.pilot import PilotManager
     from agora.convergence import ConvergenceStore
+    from agora.federation import federation_router
 except ImportError:
     # Allow running from parent directory
     import sys
@@ -45,6 +46,7 @@ except ImportError:
     from agora.moderation import ModerationStore
     from agora.pilot import PilotManager
     from agora.convergence import ConvergenceStore
+    from agora.federation import federation_router
 
 # =============================================================================
 # CONFIGURATION
@@ -900,6 +902,13 @@ try:
     app.include_router(explorer_router)
 except Exception:
     # Explorer is non-critical; API should still boot if templates/deps are missing.
+    pass
+
+# Optional federation API (mounted at /api/federation)
+try:
+    app.include_router(federation_router)
+except Exception:
+    # Federation is optional for local/dev runtimes.
     pass
 
 
