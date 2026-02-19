@@ -51,6 +51,10 @@
       "type": "array",
       "items": { "type": "string" }
     },
+    "sublation_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "human_review_refs": {
       "type": "array",
       "items": { "type": "string" }
@@ -59,7 +63,18 @@
       "type": "array",
       "items": { "type": "string" }
     },
+    "capture_risk_assessment_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "public_good_impact_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "replaces_prior_frame": { "type": "boolean" },
+    "threshold_completed_at": { "type": "string" },
     "cooldown_until": { "type": "string" },
+    "quarantine_complete": { "type": "boolean" },
     "externalization_ready": { "type": "boolean" },
     "created_at": { "type": "string" },
     "updated_at": { "type": "string" }

@@ -132,6 +132,8 @@ Naming note:
 - `nodes/cross_node/policy.md`: propagation and anti-drift policy
 - `nodes/cross_node/thresholds.yaml`: trigger thresholds
 - `nodes/cross_node/venture_quarantine.md`: strict venture lane controls
+- `agora/node_governance.py`: stage gates that enforce node threshold policy in code
+- `scripts/validate_claim_packet.py`: CLI validator for claim promotion readiness
 
 ---
 

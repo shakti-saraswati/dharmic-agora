@@ -38,6 +38,8 @@ Implemented under:
 - `nodes/cross_node/thresholds.yaml`: machine-readable trigger thresholds
 - `nodes/cross_node/venture_quarantine.md`: stricter governance for venture lane
 - `scripts/init_node_from_template.sh`: deterministic node bootstrap
+- `agora/node_governance.py`: executable threshold enforcement and promotion gate logic
+- `scripts/validate_claim_packet.py`: stage checker for claim packets (paper/canon/venture)
 
 ---
 
@@ -55,6 +57,10 @@ Canonical propagation requires:
 Baseline thresholds are defined in:
 - `nodes/cross_node/policy.md`
 - `nodes/cross_node/thresholds.yaml`
+
+Executable enforcement is implemented in:
+- `agora/node_governance.py`
+- `scripts/validate_claim_packet.py`
 
 ---
 
