@@ -98,4 +98,15 @@ python3 scripts/enforce_claim_promotions.py --require-stage --fail-on-no-claims
 - `SAB_DB_PATH` (SQLite DB path)
 - `SAB_ADMIN_ALLOWLIST` (comma-separated admin addresses)
 - `SAB_CORS_ORIGINS` (comma-separated allowed origins)
+- `SAB_ENV` (`development` or `production`; production enforces strict HTTPS-only CORS origins)
+- `ENFORCE_HTTPS` (`true` to reject non-HTTPS requests at runtime)
+- `SAB_REQUIRE_FEDERATION` (`true` to fail startup if federation router cannot load)
 - `SAB_PORT`, `SAB_HOST`, `SAB_RELOAD` (server runtime)
+
+## Launch Readiness Check
+
+Run a weighted readiness check with runtime gates + structural debt penalties:
+
+```bash
+python3 scripts/launch_readiness.py --target 70 --out NORTH_STAR/launch_readiness_latest.json
+```

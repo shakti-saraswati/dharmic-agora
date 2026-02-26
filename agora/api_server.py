@@ -21,8 +21,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Literal
 from contextlib import contextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, Header, Query, status
+from fastapi import FastAPI, HTTPException, Depends, Header, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 # Import core modules (allow running from repo root too)
@@ -31,6 +32,7 @@ try:
     from agora.config import SAB_VERSION, get_db_path
     from agora.depth import calculate_depth_score
     from agora.gates import OrthogonalGates
+    from agora.kernel import evaluate_kernel, kernel_contract
     from agora.moderation import ModerationStore
     from agora.pilot import PilotManager
     from agora.convergence import ConvergenceStore
@@ -43,6 +45,7 @@ except ImportError:
     from agora.config import SAB_VERSION, get_db_path
     from agora.depth import calculate_depth_score
     from agora.gates import OrthogonalGates
+    from agora.kernel import evaluate_kernel, kernel_contract
     from agora.moderation import ModerationStore
     from agora.pilot import PilotManager
     from agora.convergence import ConvergenceStore
@@ -869,6 +872,26 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+# HTTPS enforcement (opt-in via ENFORCE_HTTPS=true).
+@app.middleware("http")
+async def enforce_https(request: Request, call_next):
+    if _env_truthy("ENFORCE_HTTPS", default=False):
+        # Prefer proxy-provided scheme when behind ingress/load balancers.
+        forwarded = request.headers.get("x-forwarded-proto", "")
+        forwarded_scheme = forwarded.split(",")[0].strip().lower() if forwarded else ""
+        scheme = forwarded_scheme or (request.url.scheme or "").lower()
+        if scheme != "https":
+            return JSONResponse(status_code=400, content={"error": "HTTPS required"})
+    return await call_next(request)
+
 # CORS middleware - SECURITY: Never use wildcard with credentials
 # Load allowed origins from environment or use safe defaults for development
 _DEFAULT_ORIGINS = [
@@ -880,6 +903,20 @@ _DEFAULT_ORIGINS = [
 
 _cors_env = os.getenv("SAB_CORS_ORIGINS")
 ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(",")] if _cors_env else _DEFAULT_ORIGINS
+_SAB_ENV = os.getenv("SAB_ENV", "development").strip().lower()
+
+if _SAB_ENV in {"prod", "production"}:
+    if not ALLOWED_ORIGINS:
+        raise RuntimeError("SAB_CORS_ORIGINS must be set in production")
+    wildcard = [o for o in ALLOWED_ORIGINS if "*" in o]
+    non_https = [o for o in ALLOWED_ORIGINS if not o.startswith("https://")]
+    local_hosts = [o for o in ALLOWED_ORIGINS if "localhost" in o or "127.0.0.1" in o]
+    if wildcard:
+        raise RuntimeError(f"SAB_CORS_ORIGINS cannot include wildcards in production: {wildcard}")
+    if non_https:
+        raise RuntimeError(f"SAB_CORS_ORIGINS must be HTTPS in production: {non_https}")
+    if local_hosts:
+        raise RuntimeError(f"SAB_CORS_ORIGINS cannot include localhost in production: {local_hosts}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -905,11 +942,19 @@ except Exception:
     pass
 
 # Optional federation API (mounted at /api/federation)
+_federation_enabled = False
+_federation_error: Optional[Exception] = None
 try:
     app.include_router(federation_router)
-except Exception:
+    _federation_enabled = True
+except Exception as e:
     # Federation is optional for local/dev runtimes.
-    pass
+    _federation_error = e
+
+if _env_truthy("SAB_REQUIRE_FEDERATION", default=False) and not _federation_enabled:
+    raise RuntimeError(
+        "SAB_REQUIRE_FEDERATION=true but federation router failed to load"
+    ) from _federation_error
 
 
 # =============================================================================
@@ -1908,6 +1953,25 @@ async def get_audit_trail(
         rows = cursor.fetchall()
     
     return [AuditEntry(**dict(row)) for row in rows]
+
+
+@app.get("/kernel")
+async def get_kernel_contract():
+    """Expose the non-votable SAB kernel contract."""
+    return kernel_contract()
+
+
+@app.post("/kernel/evaluate")
+async def evaluate_kernel_signals(
+    content: str = Query(..., min_length=1),
+    agent_telos: str = Query("", max_length=2000),
+):
+    """Evaluate kernel invariants for content without submitting it."""
+    gate_result = OrthogonalGates().evaluate({"body": content}, agent_telos=agent_telos)
+    return {
+        "gate_result": gate_result,
+        "kernel": evaluate_kernel(content, gate_result),
+    }
 
 
 @app.get("/gates", response_model=GateStatus)

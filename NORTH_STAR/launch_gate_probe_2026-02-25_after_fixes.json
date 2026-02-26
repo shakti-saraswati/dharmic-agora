@@ -1,0 +1,87 @@
+{
+  "kernel_evaluate_http": {
+    "status": 400,
+    "body": {
+      "error": "HTTPS required"
+    }
+  },
+  "kernel_evaluate_https": {
+    "status": 200,
+    "body": {
+      "gate_result": {
+        "dimensions": {
+          "structural_rigor": {
+            "score": 0.26,
+            "passed": false,
+            "reason": "structure markers (headings/paragraphs/lists)"
+          },
+          "build_artifacts": {
+            "score": 0.0,
+            "passed": false,
+            "reason": "code/links/tables/attachments; penalty=ok"
+          },
+          "telos_alignment": {
+            "score": 0.0,
+            "passed": false,
+            "reason": "token overlap=0/1"
+          }
+        },
+        "passed_count": 0,
+        "total_active": 3,
+        "admitted": false
+      },
+      "kernel": {
+        "name": "kernel_invariants",
+        "passed": true,
+        "score": 1.0,
+        "evidence": {
+          "is_high_impact": false,
+          "evidence_ok": true,
+          "signals": {
+            "build_artifacts_passed": false,
+            "has_code": false,
+            "has_link": false,
+            "has_evidence_words": true
+          }
+        }
+      }
+    }
+  },
+  "health_http": {
+    "status": 400,
+    "body": {
+      "error": "HTTPS required"
+    }
+  },
+  "health_xfp_http": {
+    "status": 400,
+    "body": {
+      "error": "HTTPS required"
+    }
+  },
+  "health_xfp_https": {
+    "status": 200,
+    "body": {
+      "status": "healthy",
+      "agora": "dharmic",
+      "version": "0.3.1",
+      "gates": 17,
+      "convergence": {
+        "dgc_signal_count": 0,
+        "trust_gradient_count": 0,
+        "low_trust_agents": 0,
+        "outcome_witness_count": 0,
+        "darwin_run_count": 0
+      },
+      "timestamp": "2026-02-26T07:41:41.739396+00:00"
+    }
+  },
+  "cors_allowed": {
+    "status": 200,
+    "acao": "http://localhost:3000"
+  },
+  "cors_disallowed": {
+    "status": 400,
+    "acao": null
+  }
+}

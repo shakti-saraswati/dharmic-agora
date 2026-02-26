@@ -558,6 +558,18 @@ class TestGatesEndpoint:
         assert "gate_result" in data
         assert "depth_score" in data
 
+    def test_kernel_evaluate(self, fresh_app):
+        client, _, _ = fresh_app
+        resp = client.post("/kernel/evaluate", params={
+            "content": "# Deployment Note\n\nSecurity-sensitive rollout with method and reproducible checks.",
+            "agent_telos": "safety-first shipping",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "gate_result" in data
+        assert "kernel" in data
+        assert "passed" in data["kernel"]
+
 
 # =============================================================================
 # WITNESS CHAIN TESTS

@@ -1,0 +1,157 @@
+{
+  "timestamp": "2026-02-26T14:38:50Z",
+  "target_score": 70,
+  "base_runtime_score": 100,
+  "technical_debt_penalty": 25,
+  "industry_readiness_score": 75,
+  "meets_target": true,
+  "runtime_checks": [
+    {
+      "name": "https_blocks_plain_http",
+      "weight": 15,
+      "ok": true,
+      "status": "VERIFIED",
+      "evidence": "GET /health with ENFORCE_HTTPS=true and no x-forwarded-proto",
+      "detail": {
+        "status_code": 400,
+        "body": {
+          "error": "HTTPS required"
+        }
+      }
+    },
+    {
+      "name": "https_allows_forwarded_https",
+      "weight": 10,
+      "ok": true,
+      "status": "VERIFIED",
+      "evidence": "GET /health with x-forwarded-proto=https",
+      "detail": {
+        "status_code": 200
+      }
+    },
+    {
+      "name": "auth_register_challenge_verify_flow",
+      "weight": 15,
+      "ok": true,
+      "status": "VERIFIED",
+      "evidence": "POST /auth/register -> GET /auth/challenge -> POST /auth/verify",
+      "detail": {
+        "register_status": 200,
+        "challenge_status": 200,
+        "verify_status": 200
+      }
+    },
+    {
+      "name": "gates_endpoint",
+      "weight": 8,
+      "ok": true,
+      "status": "VERIFIED",
+      "evidence": "GET /gates",
+      "detail": {
+        "status_code": 200
+      }
+    },
+    {
+      "name": "gates_evaluate_endpoint",
+      "weight": 8,
+      "ok": true,
+      "status": "VERIFIED",
+      "evidence": "POST /gates/evaluate",
+      "detail": {
+        "status_code": 200
+      }
+    },
+    {
+      "name": "kernel_evaluate_endpoint",
+      "weight": 12,
+      "ok": true,
+      "status": "VERIFIED",
+      "evidence": "POST /kernel/evaluate",
+      "detail": {
+        "status_code": 200
+      }
+    },
+    {
+      "name": "witness_endpoint",
+      "weight": 5,
+      "ok": true,
+      "status": "VERIFIED",
+      "evidence": "GET /witness",
+      "detail": {
+        "status_code": 200
+      }
+    },
+    {
+      "name": "federation_secret_enforced",
+      "weight": 10,
+      "ok": true,
+      "status": "VERIFIED",
+      "evidence": "GET /api/federation/health without X-SAB-Federation-Secret (secret configured)",
+      "detail": {
+        "status_code": 401
+      }
+    },
+    {
+      "name": "federation_health_with_secret",
+      "weight": 7,
+      "ok": true,
+      "status": "VERIFIED",
+      "evidence": "GET /api/federation/health with valid federation secret",
+      "detail": {
+        "status_code": 200
+      }
+    },
+    {
+      "name": "cors_allowed_origin",
+      "weight": 5,
+      "ok": true,
+      "status": "VERIFIED",
+      "evidence": "OPTIONS /gates with allowed origin",
+      "detail": {
+        "status_code": 200,
+        "acao": "http://localhost:3000"
+      }
+    },
+    {
+      "name": "cors_blocks_disallowed_origin",
+      "weight": 5,
+      "ok": true,
+      "status": "VERIFIED",
+      "evidence": "OPTIONS /gates with disallowed origin",
+      "detail": {
+        "status_code": 400,
+        "acao": null
+      }
+    }
+  ],
+  "debt_penalties": [
+    {
+      "name": "dual_gate_system_drift",
+      "penalty": 10,
+      "status": "PARTIAL",
+      "evidence": "api_server.py + gates.py contain overlapping gate systems",
+      "detail": {
+        "triggered": true
+      }
+    },
+    {
+      "name": "api_server_monolith_size",
+      "penalty": 10,
+      "status": "PARTIAL",
+      "evidence": "api_server.py line count",
+      "detail": {
+        "line_count": 2080,
+        "threshold": 2000
+      }
+    },
+    {
+      "name": "system_doc_drift",
+      "penalty": 5,
+      "status": "PARTIAL",
+      "evidence": "SYSTEM.md references legacy src/* layout",
+      "detail": {
+        "triggered": true
+      }
+    }
+  ]
+}
