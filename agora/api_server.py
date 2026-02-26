@@ -872,10 +872,18 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 # HTTPS enforcement (opt-in via ENFORCE_HTTPS=true).
 @app.middleware("http")
 async def enforce_https(request: Request, call_next):
-    if os.getenv("ENFORCE_HTTPS", "false").strip().lower() == "true":
+    if _env_truthy("ENFORCE_HTTPS", default=False):
         # Prefer proxy-provided scheme when behind ingress/load balancers.
         forwarded = request.headers.get("x-forwarded-proto", "")
         forwarded_scheme = forwarded.split(",")[0].strip().lower() if forwarded else ""
@@ -895,6 +903,20 @@ _DEFAULT_ORIGINS = [
 
 _cors_env = os.getenv("SAB_CORS_ORIGINS")
 ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(",")] if _cors_env else _DEFAULT_ORIGINS
+_SAB_ENV = os.getenv("SAB_ENV", "development").strip().lower()
+
+if _SAB_ENV in {"prod", "production"}:
+    if not ALLOWED_ORIGINS:
+        raise RuntimeError("SAB_CORS_ORIGINS must be set in production")
+    wildcard = [o for o in ALLOWED_ORIGINS if "*" in o]
+    non_https = [o for o in ALLOWED_ORIGINS if not o.startswith("https://")]
+    local_hosts = [o for o in ALLOWED_ORIGINS if "localhost" in o or "127.0.0.1" in o]
+    if wildcard:
+        raise RuntimeError(f"SAB_CORS_ORIGINS cannot include wildcards in production: {wildcard}")
+    if non_https:
+        raise RuntimeError(f"SAB_CORS_ORIGINS must be HTTPS in production: {non_https}")
+    if local_hosts:
+        raise RuntimeError(f"SAB_CORS_ORIGINS cannot include localhost in production: {local_hosts}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -920,11 +942,19 @@ except Exception:
     pass
 
 # Optional federation API (mounted at /api/federation)
+_federation_enabled = False
+_federation_error: Optional[Exception] = None
 try:
     app.include_router(federation_router)
-except Exception:
+    _federation_enabled = True
+except Exception as e:
     # Federation is optional for local/dev runtimes.
-    pass
+    _federation_error = e
+
+if _env_truthy("SAB_REQUIRE_FEDERATION", default=False) and not _federation_enabled:
+    raise RuntimeError(
+        "SAB_REQUIRE_FEDERATION=true but federation router failed to load"
+    ) from _federation_error
 
 
 # =============================================================================
