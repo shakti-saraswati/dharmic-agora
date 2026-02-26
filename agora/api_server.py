@@ -21,8 +21,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Literal
 from contextlib import contextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, Header, Query, status
+from fastapi import FastAPI, HTTPException, Depends, Header, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 # Import core modules (allow running from repo root too)
@@ -31,6 +32,7 @@ try:
     from agora.config import SAB_VERSION, get_db_path
     from agora.depth import calculate_depth_score
     from agora.gates import OrthogonalGates
+    from agora.kernel import evaluate_kernel, kernel_contract
     from agora.moderation import ModerationStore
     from agora.pilot import PilotManager
     from agora.convergence import ConvergenceStore
@@ -43,6 +45,7 @@ except ImportError:
     from agora.config import SAB_VERSION, get_db_path
     from agora.depth import calculate_depth_score
     from agora.gates import OrthogonalGates
+    from agora.kernel import evaluate_kernel, kernel_contract
     from agora.moderation import ModerationStore
     from agora.pilot import PilotManager
     from agora.convergence import ConvergenceStore
@@ -868,6 +871,18 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+# HTTPS enforcement (opt-in via ENFORCE_HTTPS=true).
+@app.middleware("http")
+async def enforce_https(request: Request, call_next):
+    if os.getenv("ENFORCE_HTTPS", "false").strip().lower() == "true":
+        # Prefer proxy-provided scheme when behind ingress/load balancers.
+        forwarded = request.headers.get("x-forwarded-proto", "")
+        forwarded_scheme = forwarded.split(",")[0].strip().lower() if forwarded else ""
+        scheme = forwarded_scheme or (request.url.scheme or "").lower()
+        if scheme != "https":
+            return JSONResponse(status_code=400, content={"error": "HTTPS required"})
+    return await call_next(request)
 
 # CORS middleware - SECURITY: Never use wildcard with credentials
 # Load allowed origins from environment or use safe defaults for development
@@ -1908,6 +1923,25 @@ async def get_audit_trail(
         rows = cursor.fetchall()
     
     return [AuditEntry(**dict(row)) for row in rows]
+
+
+@app.get("/kernel")
+async def get_kernel_contract():
+    """Expose the non-votable SAB kernel contract."""
+    return kernel_contract()
+
+
+@app.post("/kernel/evaluate")
+async def evaluate_kernel_signals(
+    content: str = Query(..., min_length=1),
+    agent_telos: str = Query("", max_length=2000),
+):
+    """Evaluate kernel invariants for content without submitting it."""
+    gate_result = OrthogonalGates().evaluate({"body": content}, agent_telos=agent_telos)
+    return {
+        "gate_result": gate_result,
+        "kernel": evaluate_kernel(content, gate_result),
+    }
 
 
 @app.get("/gates", response_model=GateStatus)

@@ -1,0 +1,15 @@
+# Launch-Critical Fix Run 2026-02-26
+
+$ rg -n "@app.middleware\(\"http\"\)|@app.post\(\"/kernel/evaluate\"\)|@app.get\(\"/kernel\"\)" agora/api_server.py
+876:@app.middleware("http")
+1928:@app.get("/kernel")
+1934:@app.post("/kernel/evaluate")
+
+$ pytest -q agora/tests/test_integration.py::TestGatesEndpoint::test_kernel_evaluate agora/tests/test_https_enforcement.py
+...                                                                      [100%]
+3 passed in 0.39s
+
+$ pytest -q agora/tests/test_auth.py agora/tests/test_gate_eval.py agora/tests/test_federation.py agora/tests/test_integration.py tests/test_sabp_loop.py agora/tests/test_https_enforcement.py
+........................................................................ [ 80%]
+..................                                                       [100%]
+90 passed in 2.69s
