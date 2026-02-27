@@ -25,6 +25,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import sqlite3
 import time
@@ -32,6 +33,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Tuple
+try:
+    from passlib.context import CryptContext
+except ImportError:  # Optional in local/dev; production should install passlib[bcrypt]
+    CryptContext = None  # type: ignore[assignment]
 
 try:
     from .config import get_admin_allowlist, get_db_path, JWT_SECRET_FILE as CONFIG_JWT_SECRET_FILE
@@ -59,6 +64,37 @@ AGORA_DB = get_db_path()
 CHALLENGE_TTL_SECONDS = 60
 JWT_TTL_HOURS = 24
 JWT_SECRET_FILE = CONFIG_JWT_SECRET_FILE
+TOKEN_NAME_PATTERN = re.compile(r"^[A-Za-z0-9-]{3,30}$")
+TOKEN_HASHER = CryptContext(schemes=["bcrypt"], deprecated="auto") if CryptContext else None
+
+
+def _hash_simple_token_secret(token: str) -> str:
+    """Hash a simple token secret (bcrypt preferred, sha256 fallback)."""
+    if TOKEN_HASHER is not None:
+        return TOKEN_HASHER.hash(token)
+    return f"sha256${hashlib.sha256(token.encode()).hexdigest()}"
+
+
+def _verify_simple_token_secret(token: str, stored_hash: str) -> bool:
+    """Verify simple token secret against bcrypt/sha256 hash formats."""
+    if not stored_hash:
+        return False
+
+    if stored_hash.startswith("$2"):
+        if TOKEN_HASHER is None:
+            return False
+        try:
+            return bool(TOKEN_HASHER.verify(token, stored_hash))
+        except Exception:
+            return False
+
+    if stored_hash.startswith("sha256$"):
+        candidate = stored_hash[len("sha256$"):]
+    else:
+        # Legacy rows may store raw sha256 in token_hash.
+        candidate = stored_hash
+
+    return hmac.compare_digest(candidate, hashlib.sha256(token.encode()).hexdigest())
 
 
 # =============================================================================
@@ -292,7 +328,8 @@ class AgentAuth:
 
         Backward compatibility:
         - Legacy rows may have plaintext token in `token` and null `token_hash`.
-        - We backfill `token_hash` and replace token with a non-secret reference.
+        - We backfill `token_hash` (sha256 for migration safety) and replace token
+          with a non-secret reference.
         """
         cursor.execute("PRAGMA table_info(simple_tokens)")
         columns = {row[1] for row in cursor.fetchall()}
@@ -668,21 +705,54 @@ class AgentAuth:
 
         self._witness("agent_banned", address, {"reason": reason})
 
+    def _validate_simple_token_name(self, name: str) -> None:
+        """Validate onboarding name constraints for simple-token registration."""
+        if not isinstance(name, str):
+            raise ValueError("Name must be a string")
+        if not TOKEN_NAME_PATTERN.fullmatch(name):
+            raise ValueError("Name must be 3-30 chars: alphanumeric or hyphen")
+
+    def _is_name_taken(self, name: str) -> bool:
+        """Check whether a public-facing agent name is already in use."""
+        lowered = name.lower()
+        conn = sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                """
+                SELECT 1 FROM agents WHERE LOWER(name) = ?
+                UNION
+                SELECT 1 FROM simple_tokens WHERE LOWER(name) = ?
+                UNION
+                SELECT 1 FROM api_keys WHERE LOWER(name) = ?
+                LIMIT 1
+                """,
+                (lowered, lowered, lowered),
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+
     # =========================================================================
     # TIER 1: Simple Token Auth (lowest barrier)
     # =========================================================================
 
-    def create_simple_token(self, name: str, telos: str = "") -> dict:
+    def create_simple_token(self, name: str, telos: str = "", strict_onboarding: bool = False) -> dict:
         """
         Create a simple bearer token. No crypto required.
 
         Returns:
-            {"token": "sab_t_...", "address": "...", "name": "...", "expires_at": "..."}
+            {"token": "sab_...", "address": "...", "name": "...", "expires_at": "..."}
         """
-        token = f"sab_t_{secrets.token_hex(24)}"
-        token_hash = hashlib.sha256(token.encode()).hexdigest()
-        token_ref = f"ref_{token_hash[:24]}"
-        address = f"t_{token_hash[:14]}"
+        if strict_onboarding:
+            self._validate_simple_token_name(name)
+            if self._is_name_taken(name):
+                raise ValueError(f"Name already registered: {name}")
+
+        token = f"sab_{secrets.token_hex(32)}"
+        token_hash = _hash_simple_token_secret(token)
+        token_fingerprint = hashlib.sha256(token.encode()).hexdigest()
+        token_ref = f"ref_{token_fingerprint[:24]}"
+        address = f"t_{token_fingerprint[:14]}"
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(hours=JWT_TTL_HOURS)
 
@@ -710,28 +780,35 @@ class AgentAuth:
         """
         if not isinstance(token, str):
             return None
-        if not token.startswith("sab_t_"):
+        if not token.startswith("sab_"):
             return None
         if len(token) > 256:
             return None
-
-        token_hash = hashlib.sha256(token.encode()).hexdigest()
         
         conn = sqlite3.connect(self.db_path)
         try:
             now = datetime.now(timezone.utc).isoformat()
-            row = conn.execute(
+            rows = conn.execute(
                 """
-                SELECT address, name, telos, expires_at
+                SELECT token_hash, address, name, telos
                 FROM simple_tokens
-                WHERE token_hash = ? AND expires_at > ?
+                WHERE token_hash IS NOT NULL AND token_hash != '' AND expires_at > ?
                 """,
-                (token_hash, now),
-            ).fetchone()
-            if row:
-                address, name, telos, _ = row
-                return {"address": address, "name": name, "telos": telos,
-                        "reputation": 0.0, "auth_method": "token"}
+                (now,),
+            ).fetchall()
+
+            for stored_hash, address, name, telos in rows:
+                if not stored_hash:
+                    continue
+
+                if _verify_simple_token_secret(token, stored_hash):
+                    return {
+                        "address": address,
+                        "name": name,
+                        "telos": telos,
+                        "reputation": 0.0,
+                        "auth_method": "token",
+                    }
 
             # Legacy fallback: plaintext rows that predate token_hash migration.
             rows = conn.execute(

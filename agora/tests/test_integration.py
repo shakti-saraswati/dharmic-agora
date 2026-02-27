@@ -639,9 +639,39 @@ class TestTier1SimpleToken:
         })
         assert resp.status_code == 200
         data = resp.json()
-        assert data["token"].startswith("sab_t_")
+        assert data["token"].startswith("sab_")
         assert data["address"].startswith("t_")
         assert data["auth_method"] == "token"
+
+    def test_register_endpoint_issues_onboarding_token(self, fresh_app):
+        client, _, _ = fresh_app
+        resp = client.post("/auth/register", json={
+            "name": "new-agent-1", "telos": "research"
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["token"].startswith("sab_")
+        assert data["address"].startswith("t_")
+        assert data["message"] == "Welcome to SAB"
+
+    def test_register_endpoint_rate_limits_per_ip(self, fresh_app):
+        client, _, _ = fresh_app
+        headers = {"X-Forwarded-For": "203.0.113.10"}
+
+        for idx in range(10):
+            resp = client.post(
+                "/auth/register",
+                json={"name": f"rate-agent-{idx}", "telos": "load-test"},
+                headers=headers,
+            )
+            assert resp.status_code == 200
+
+        blocked = client.post(
+            "/auth/register",
+            json={"name": "rate-agent-blocked", "telos": "load-test"},
+            headers=headers,
+        )
+        assert blocked.status_code == 429
 
     def test_post_with_simple_token(self, fresh_app):
         client, _, _ = fresh_app
