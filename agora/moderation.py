@@ -74,7 +74,8 @@ class ModerationStore:
                     published_content_id INTEGER,
                     signature TEXT,
                     signed_at TEXT,
-                    submission_kind TEXT NOT NULL DEFAULT 'general'
+                    submission_kind TEXT NOT NULL DEFAULT 'general',
+                    node_coordinate TEXT
                 )
                 """
             )
@@ -82,6 +83,11 @@ class ModerationStore:
                 "moderation_queue",
                 "submission_kind",
                 "submission_kind TEXT NOT NULL DEFAULT 'general'",
+            )
+            ensure_column(
+                "moderation_queue",
+                "node_coordinate",
+                "node_coordinate TEXT",
             )
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_mod_queue_status ON moderation_queue(status)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_mod_queue_author ON moderation_queue(author_address)")
@@ -99,6 +105,7 @@ class ModerationStore:
         signature: Optional[str] = None,
         signed_at: Optional[str] = None,
         submission_kind: str = "general",
+        node_coordinate: Optional[str] = None,
     ) -> Dict[str, Any]:
         created_at = created_at or datetime.now(timezone.utc).isoformat()
         with self._conn() as conn:
@@ -108,8 +115,8 @@ class ModerationStore:
                 INSERT INTO moderation_queue (
                     content_type, content, author_address, gate_evidence_hash,
                     gate_results_json, status, reason, created_at, post_id,
-                    parent_id, signature, signed_at, submission_kind
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    parent_id, signature, signed_at, submission_kind, node_coordinate
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     content_type,
@@ -125,6 +132,7 @@ class ModerationStore:
                     signature,
                     signed_at,
                     submission_kind,
+                    node_coordinate,
                 ),
             )
             queue_id = cursor.lastrowid
@@ -193,9 +201,10 @@ class ModerationStore:
                             created_at,
                             signature,
                             signed_at,
-                            submission_kind
+                            submission_kind,
+                            node_coordinate
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             item["content"],
@@ -205,6 +214,7 @@ class ModerationStore:
                             item.get("signature"),
                             item.get("signed_at"),
                             item.get("submission_kind", "general"),
+                            item.get("node_coordinate"),
                         ),
                     )
                     published_id = cursor.lastrowid
@@ -220,9 +230,10 @@ class ModerationStore:
                             created_at,
                             signature,
                             signed_at,
-                            submission_kind
+                            submission_kind,
+                            node_coordinate
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             item["post_id"],
@@ -234,6 +245,7 @@ class ModerationStore:
                             item.get("signature"),
                             item.get("signed_at"),
                             item.get("submission_kind", "general"),
+                            item.get("node_coordinate"),
                         ),
                     )
                     published_id = cursor.lastrowid

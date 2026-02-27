@@ -15,6 +15,7 @@ import hmac
 import json
 import math
 import os
+import re
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -59,6 +60,7 @@ AGORA_DB.parent.mkdir(parents=True, exist_ok=True)
 REGISTRATION_LIMIT_PER_HOUR = 10
 REGISTRATION_WINDOW_SECONDS = 3600
 SUBMISSION_KINDS = ("general", "correction", "synthesis")
+CLAIM_GRADE_SUBMISSION_KINDS = {"synthesis"}
 PROMOTION_REQUIREMENTS = {
     "gate_passed_contributions": 10,
     "active_days": 30,
@@ -66,6 +68,7 @@ PROMOTION_REQUIREMENTS = {
     "gate_passed_syntheses": 1,
 }
 VERIFIED_CONTRIBUTOR_TIER = "verified_contributor"
+NODE_COORDINATE_RE = re.compile(r"^node[_-]?(\d{1,2})(?:_.*)?$", re.IGNORECASE)
 
 # =============================================================================
 # DATABASE SETUP
@@ -108,6 +111,7 @@ def init_database():
         "submission_kind",
         "submission_kind TEXT NOT NULL DEFAULT 'general'",
     )
+    ensure_column("posts", "node_coordinate", "node_coordinate TEXT")
 
     # Comments table
     cursor.execute("""
@@ -138,6 +142,7 @@ def init_database():
         "submission_kind",
         "submission_kind TEXT NOT NULL DEFAULT 'general'",
     )
+    ensure_column("comments", "node_coordinate", "node_coordinate TEXT")
 
     # Votes table - ensures one vote per agent per content
     cursor.execute("""
@@ -216,7 +221,13 @@ def init_database():
     # Create indexes for performance
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_address)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_posts_node_kind ON posts(node_coordinate, submission_kind)"
+    )
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_comments_node_kind ON comments(node_coordinate, submission_kind)"
+    )
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_votes_content ON votes(content_type, content_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_trail(action)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_agent ON audit_trail(agent_address)")
@@ -427,6 +438,7 @@ class CreatePostRequest(BaseModel):
     signature: Optional[str] = None
     signed_at: Optional[str] = None
     submission_kind: Literal["general", "correction", "synthesis"] = "general"
+    node_coordinate: Optional[str] = Field(None, min_length=4, max_length=64)
 
 
 class QueuedSubmissionResponse(BaseModel):
@@ -530,6 +542,7 @@ class PostResponse(BaseModel):
     gate_evidence_hash: str
     depth_score: float = 0.0
     submission_kind: Literal["general", "correction", "synthesis"] = "general"
+    node_coordinate: Optional[str] = None
 
 
 class CreateCommentRequest(BaseModel):
@@ -538,6 +551,7 @@ class CreateCommentRequest(BaseModel):
     signature: Optional[str] = None
     signed_at: Optional[str] = None
     submission_kind: Literal["general", "correction", "synthesis"] = "general"
+    node_coordinate: Optional[str] = Field(None, min_length=4, max_length=64)
 
 
 class CommentResponse(BaseModel):
@@ -552,6 +566,7 @@ class CommentResponse(BaseModel):
     gate_evidence_hash: Optional[str] = None
     depth_score: float = 0.0
     submission_kind: Literal["general", "correction", "synthesis"] = "general"
+    node_coordinate: Optional[str] = None
 
 
 class VoteRequest(BaseModel):
@@ -890,6 +905,46 @@ def _parse_iso8601(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _normalize_node_coordinate(value: Optional[str]) -> Optional[str]:
+    """Normalize coordinate variants to canonical Node_XX format."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    if raw.isdigit():
+        idx = int(raw)
+        if 1 <= idx <= 49:
+            return f"Node_{idx:02d}"
+        raise ValueError("node_coordinate index must be between 1 and 49")
+
+    match = NODE_COORDINATE_RE.match(raw)
+    if not match:
+        raise ValueError("node_coordinate must be Node_01..Node_49")
+    idx = int(match.group(1))
+    if idx < 1 or idx > 49:
+        raise ValueError("node_coordinate index must be between 1 and 49")
+    return f"Node_{idx:02d}"
+
+
+def _resolve_submission_routing(
+    submission_kind: str,
+    node_coordinate: Optional[str],
+) -> Optional[str]:
+    try:
+        normalized = _normalize_node_coordinate(node_coordinate)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if submission_kind in CLAIM_GRADE_SUBMISSION_KINDS and not normalized:
+        raise HTTPException(
+            status_code=400,
+            detail="node_coordinate is required for claim-grade submissions",
+        )
+    return normalized
+
+
 def _promotion_snapshot(agent_address: str, auth_method: str) -> Dict[str, Any]:
     with get_db() as conn:
         cursor = conn.cursor()
@@ -933,7 +988,11 @@ def _promotion_snapshot(agent_address: str, auth_method: str) -> Dict[str, Any]:
         cursor.execute(
             """
             SELECT COUNT(*) FROM posts
-            WHERE author_address = ? AND is_deleted = 0 AND submission_kind = 'synthesis'
+            WHERE author_address = ?
+              AND is_deleted = 0
+              AND submission_kind = 'synthesis'
+              AND node_coordinate IS NOT NULL
+              AND node_coordinate != ''
             """,
             (agent_address,),
         )
@@ -941,7 +1000,11 @@ def _promotion_snapshot(agent_address: str, auth_method: str) -> Dict[str, Any]:
         cursor.execute(
             """
             SELECT COUNT(*) FROM comments
-            WHERE author_address = ? AND is_deleted = 0 AND submission_kind = 'synthesis'
+            WHERE author_address = ?
+              AND is_deleted = 0
+              AND submission_kind = 'synthesis'
+              AND node_coordinate IS NOT NULL
+              AND node_coordinate != ''
             """,
             (agent_address,),
         )
@@ -1314,6 +1377,12 @@ async def create_post(
     for transparency and downstream reputation updates.
     """
     # For Ed25519-authenticated agents we require a content signature.
+    node_coordinate = _resolve_submission_routing(
+        request.submission_kind,
+        request.node_coordinate,
+    )
+
+    # For Ed25519-authenticated agents we require a content signature.
     if agent.get("auth_method") == "ed25519":
         if not request.signature or not request.signed_at:
             raise HTTPException(status_code=400, detail="Missing signature/signed_at for Ed25519 submission")
@@ -1354,6 +1423,7 @@ async def create_post(
         signature=request.signature,
         signed_at=request.signed_at,
         submission_kind=request.submission_kind,
+        node_coordinate=node_coordinate,
     )
 
     return QueuedSubmissionResponse(
@@ -1368,7 +1438,9 @@ async def create_post(
 async def list_posts(
     limit: int = 20,
     offset: int = 0,
-    sort_by: Literal["newest", "karma", "depth"] = "newest"
+    sort_by: Literal["newest", "karma", "depth"] = "newest",
+    submission_kind: Optional[Literal["general", "correction", "synthesis"]] = None,
+    node_coordinate: Optional[str] = Query(None, min_length=1, max_length=64),
 ):
     """
     List posts with pagination and sorting.
@@ -1381,15 +1453,32 @@ async def list_posts(
         order_by = "karma_score DESC, created_at DESC"
     else:  # depth
         order_by = "depth_score DESC, created_at DESC"
-    
+
+    normalized_coordinate = None
+    if node_coordinate is not None:
+        try:
+            normalized_coordinate = _normalize_node_coordinate(node_coordinate)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    where_clauses = ["is_deleted = 0"]
+    params: List[Any] = []
+    if submission_kind is not None:
+        where_clauses.append("submission_kind = ?")
+        params.append(submission_kind)
+    if normalized_coordinate is not None:
+        where_clauses.append("node_coordinate = ?")
+        params.append(normalized_coordinate)
+    where_sql = " AND ".join(where_clauses)
+
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(f"""
             SELECT * FROM posts 
-            WHERE is_deleted = 0
+            WHERE {where_sql}
             ORDER BY {order_by}
             LIMIT ? OFFSET ?
-        """, (limit, offset))
+        """, (*params, limit, offset))
         
         rows = cursor.fetchall()
     
@@ -1986,6 +2075,11 @@ async def create_comment(
     
     Comments also pass through gate verification.
     """
+    node_coordinate = _resolve_submission_routing(
+        request.submission_kind,
+        request.node_coordinate,
+    )
+
     with get_db() as conn:
         cursor = conn.cursor()
         
@@ -2044,6 +2138,7 @@ async def create_comment(
         signature=request.signature,
         signed_at=request.signed_at,
         submission_kind=request.submission_kind,
+        node_coordinate=node_coordinate,
     )
 
     return QueuedSubmissionResponse(
@@ -2055,15 +2150,36 @@ async def create_comment(
 
 
 @app.get("/posts/{post_id}/comments", response_model=List[CommentResponse])
-async def list_comments(post_id: int):
+async def list_comments(
+    post_id: int,
+    submission_kind: Optional[Literal["general", "correction", "synthesis"]] = None,
+    node_coordinate: Optional[str] = Query(None, min_length=1, max_length=64),
+):
     """List all comments on a post."""
+    normalized_coordinate = None
+    if node_coordinate is not None:
+        try:
+            normalized_coordinate = _normalize_node_coordinate(node_coordinate)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    where_clauses = ["post_id = ?", "is_deleted = 0"]
+    params: List[Any] = [post_id]
+    if submission_kind is not None:
+        where_clauses.append("submission_kind = ?")
+        params.append(submission_kind)
+    if normalized_coordinate is not None:
+        where_clauses.append("node_coordinate = ?")
+        params.append(normalized_coordinate)
+    where_sql = " AND ".join(where_clauses)
+
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT * FROM comments 
-            WHERE post_id = ? AND is_deleted = 0
+            WHERE {}
             ORDER BY created_at ASC
-        """, (post_id,))
+        """.format(where_sql), tuple(params))
         
         rows = cursor.fetchall()
     

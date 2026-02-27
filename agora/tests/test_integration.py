@@ -239,6 +239,80 @@ class TestPostLifecycle:
         assert "depth_score" in data
         assert data["depth_score"] >= 0
 
+    def test_synthesis_requires_node_coordinate(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        user = _register_and_auth(api_server, monkeypatch)
+
+        content = "Claim-grade synthesis without coordinate should be rejected."
+        sig, signed_at = _sign_content(user, content)
+        resp = client.post(
+            "/posts",
+            json={
+                "content": content,
+                "signature": sig,
+                "signed_at": signed_at,
+                "submission_kind": "synthesis",
+            },
+            headers=user["headers"],
+        )
+        assert resp.status_code == 400
+        assert "node_coordinate" in str(resp.json()["detail"])
+
+    def test_node_coordinate_routes_synthesis_posts(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        admin = _register_and_auth(api_server, monkeypatch, is_admin=True)
+        user = _register_and_auth(api_server)
+
+        synth_content = "Synthesis mapped to Node_36 for routing."
+        synth_sig, synth_signed_at = _sign_content(user, synth_content)
+        synth = client.post(
+            "/posts",
+            json={
+                "content": synth_content,
+                "signature": synth_sig,
+                "signed_at": synth_signed_at,
+                "submission_kind": "synthesis",
+                "node_coordinate": "node_36",
+            },
+            headers=user["headers"],
+        )
+        assert synth.status_code == 201
+        synth_queue = synth.json()["queue_id"]
+        assert client.post(
+            f"/admin/approve/{synth_queue}",
+            json={"reason": "claim-grade"},
+            headers=admin["headers"],
+        ).status_code == 200
+
+        general_content = "General content with no routing coordinate."
+        general_sig, general_signed_at = _sign_content(user, general_content)
+        general = client.post(
+            "/posts",
+            json={
+                "content": general_content,
+                "signature": general_sig,
+                "signed_at": general_signed_at,
+            },
+            headers=user["headers"],
+        )
+        assert general.status_code == 201
+        general_queue = general.json()["queue_id"]
+        assert client.post(
+            f"/admin/approve/{general_queue}",
+            json={"reason": "general"},
+            headers=admin["headers"],
+        ).status_code == 200
+
+        routed = client.get(
+            "/posts",
+            params={"submission_kind": "synthesis", "node_coordinate": "Node_36"},
+        )
+        assert routed.status_code == 200
+        rows = routed.json()
+        assert len(rows) == 1
+        assert rows[0]["submission_kind"] == "synthesis"
+        assert rows[0]["node_coordinate"] == "Node_36"
+
 
 # =============================================================================
 # COMMENT TESTS
@@ -302,6 +376,8 @@ class TestPromotionFlow:
                 "signed_at": signed_at,
                 "submission_kind": "synthesis" if idx == 0 else "general",
             }
+            if idx == 0:
+                payload["node_coordinate"] = "Node_36"
             queued = client.post("/posts", json=payload, headers=candidate["headers"])
             assert queued.status_code == 201
             queue_id = queued.json()["queue_id"]

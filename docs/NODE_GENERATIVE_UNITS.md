@@ -102,6 +102,12 @@ Promotion requests are explicit claim metadata, not inferred state:
 - easy helper: `python3 scripts/new_claim.py --node ... --title ...`
 - low-level helper: `python3 scripts/scaffold_claim_packet.py --node ... --title ...`
 
+Claim-grade API submissions use lattice routing metadata:
+- `submission_kind: "synthesis"` is treated as claim-grade
+- claim-grade submissions must provide `node_coordinate` in canonical `Node_01..Node_49` space
+- non-claim-grade submissions can omit coordinate (entropy preserved at ingress)
+- `GET /posts` accepts `submission_kind` + `node_coordinate` filters for node-local routing views
+
 - Paper draft trigger:
   - >=2 cross-model affirm witnesses
   - >=1 non-adjacent witness
