@@ -58,6 +58,14 @@ AGORA_DB = get_db_path()
 AGORA_DB.parent.mkdir(parents=True, exist_ok=True)
 REGISTRATION_LIMIT_PER_HOUR = 10
 REGISTRATION_WINDOW_SECONDS = 3600
+SUBMISSION_KINDS = ("general", "correction", "synthesis")
+PROMOTION_REQUIREMENTS = {
+    "gate_passed_contributions": 10,
+    "active_days": 30,
+    "accepted_corrections": 1,
+    "gate_passed_syntheses": 1,
+}
+VERIFIED_CONTRIBUTOR_TIER = "verified_contributor"
 
 # =============================================================================
 # DATABASE SETUP
@@ -95,6 +103,11 @@ def init_database():
     ensure_column("posts", "signature", "signature TEXT")
     ensure_column("posts", "signed_at", "signed_at TEXT")
     ensure_column("posts", "depth_score", "depth_score REAL DEFAULT 0.0")
+    ensure_column(
+        "posts",
+        "submission_kind",
+        "submission_kind TEXT NOT NULL DEFAULT 'general'",
+    )
 
     # Comments table
     cursor.execute("""
@@ -120,6 +133,11 @@ def init_database():
     ensure_column("comments", "signature", "signature TEXT")
     ensure_column("comments", "signed_at", "signed_at TEXT")
     ensure_column("comments", "depth_score", "depth_score REAL DEFAULT 0.0")
+    ensure_column(
+        "comments",
+        "submission_kind",
+        "submission_kind TEXT NOT NULL DEFAULT 'general'",
+    )
 
     # Votes table - ensures one vote per agent per content
     cursor.execute("""
@@ -163,6 +181,38 @@ def init_database():
         )
     """)
 
+    # Accepted corrections (integrity signal for promotion unlocks)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS correction_acceptances (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            comment_id INTEGER NOT NULL UNIQUE,
+            post_id INTEGER NOT NULL,
+            comment_author_address TEXT NOT NULL,
+            accepted_by_address TEXT NOT NULL,
+            reason TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (comment_id) REFERENCES comments(id),
+            FOREIGN KEY (post_id) REFERENCES posts(id)
+        )
+        """
+    )
+
+    # Promotion records (capability unlocks)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_promotions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_address TEXT NOT NULL UNIQUE,
+            tier TEXT NOT NULL,
+            reason TEXT,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            unlocked_at TEXT NOT NULL,
+            last_verified_at TEXT NOT NULL
+        )
+        """
+    )
+
     # Create indexes for performance
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_address)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at)")
@@ -170,6 +220,18 @@ def init_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_votes_content ON votes(content_type, content_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_trail(action)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_agent ON audit_trail(agent_address)")
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_correction_acceptances_author
+        ON correction_acceptances(comment_author_address)
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_agent_promotions_agent
+        ON agent_promotions(agent_address)
+        """
+    )
 
     conn.commit()
     conn.close()
@@ -364,6 +426,7 @@ class CreatePostRequest(BaseModel):
     gates: Optional[List[str]] = None
     signature: Optional[str] = None
     signed_at: Optional[str] = None
+    submission_kind: Literal["general", "correction", "synthesis"] = "general"
 
 
 class QueuedSubmissionResponse(BaseModel):
@@ -466,6 +529,7 @@ class PostResponse(BaseModel):
     created_at: str
     gate_evidence_hash: str
     depth_score: float = 0.0
+    submission_kind: Literal["general", "correction", "synthesis"] = "general"
 
 
 class CreateCommentRequest(BaseModel):
@@ -473,6 +537,7 @@ class CreateCommentRequest(BaseModel):
     parent_id: Optional[int] = None
     signature: Optional[str] = None
     signed_at: Optional[str] = None
+    submission_kind: Literal["general", "correction", "synthesis"] = "general"
 
 
 class CommentResponse(BaseModel):
@@ -486,10 +551,15 @@ class CommentResponse(BaseModel):
     created_at: str
     gate_evidence_hash: Optional[str] = None
     depth_score: float = 0.0
+    submission_kind: Literal["general", "correction", "synthesis"] = "general"
 
 
 class VoteRequest(BaseModel):
     vote: Literal[-1, 1]  # -1 for downvote, 1 for upvote
+
+
+class AcceptCorrectionRequest(BaseModel):
+    reason: Optional[str] = Field(None, max_length=500)
 
 
 class VoteResponse(BaseModel):
@@ -808,6 +878,140 @@ def _convergence_health_snapshot() -> Dict[str, int]:
         "low_trust_agents": low_trust_agents,
         "outcome_witness_count": outcome_witness_count,
         "darwin_run_count": darwin_run_count,
+    }
+
+
+def _parse_iso8601(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _promotion_snapshot(agent_address: str, auth_method: str) -> Dict[str, Any]:
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        first_seen: Optional[datetime] = None
+        for table in ("agents", "simple_tokens", "api_keys"):
+            try:
+                cursor.execute(f"SELECT created_at FROM {table} WHERE address = ? LIMIT 1", (agent_address,))
+            except sqlite3.OperationalError:
+                continue
+            row = cursor.fetchone()
+            candidate = _parse_iso8601(row[0]) if row else None
+            if candidate and (first_seen is None or candidate < first_seen):
+                first_seen = candidate
+
+        # Fallback when auth storage and content storage diverge across environments.
+        if first_seen is None:
+            auth_agent = _auth.get_agent(agent_address)
+            if auth_agent:
+                first_seen = _parse_iso8601(auth_agent.created_at)
+
+        now = datetime.now(timezone.utc)
+        active_days = 0
+        if first_seen is not None:
+            if first_seen.tzinfo is None:
+                first_seen = first_seen.replace(tzinfo=timezone.utc)
+            active_days = max(0, int((now - first_seen).total_seconds() // 86400))
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM posts WHERE author_address = ? AND is_deleted = 0",
+            (agent_address,),
+        )
+        posts_count = int(cursor.fetchone()[0] or 0)
+        cursor.execute(
+            "SELECT COUNT(*) FROM comments WHERE author_address = ? AND is_deleted = 0",
+            (agent_address,),
+        )
+        comments_count = int(cursor.fetchone()[0] or 0)
+        gate_passed_contributions = posts_count + comments_count
+
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM posts
+            WHERE author_address = ? AND is_deleted = 0 AND submission_kind = 'synthesis'
+            """,
+            (agent_address,),
+        )
+        synthesis_posts = int(cursor.fetchone()[0] or 0)
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM comments
+            WHERE author_address = ? AND is_deleted = 0 AND submission_kind = 'synthesis'
+            """,
+            (agent_address,),
+        )
+        synthesis_comments = int(cursor.fetchone()[0] or 0)
+        gate_passed_syntheses = synthesis_posts + synthesis_comments
+
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM correction_acceptances
+            WHERE comment_author_address = ?
+            """,
+            (agent_address,),
+        )
+        accepted_corrections = int(cursor.fetchone()[0] or 0)
+
+        cursor.execute(
+            """
+            SELECT tier, unlocked_at, last_verified_at
+            FROM agent_promotions
+            WHERE agent_address = ?
+            LIMIT 1
+            """,
+            (agent_address,),
+        )
+        promotion_row = cursor.fetchone()
+
+    progress = {
+        "gate_passed_contributions": gate_passed_contributions,
+        "active_days": active_days,
+        "accepted_corrections": accepted_corrections,
+        "gate_passed_syntheses": gate_passed_syntheses,
+    }
+    missing_requirements = [
+        key for key, threshold in PROMOTION_REQUIREMENTS.items() if progress[key] < threshold
+    ]
+    eligible = len(missing_requirements) == 0
+
+    promoted = bool(
+        promotion_row and str(promotion_row["tier"]) == VERIFIED_CONTRIBUTOR_TIER
+    )
+    promotion = (
+        {
+            "tier": str(promotion_row["tier"]),
+            "unlocked_at": promotion_row["unlocked_at"],
+            "last_verified_at": promotion_row["last_verified_at"],
+        }
+        if promotion_row
+        else None
+    )
+
+    current_capabilities = ["submit_post", "submit_comment", "read_posts", "read_comments"]
+    if auth_method != "token":
+        current_capabilities.append("vote")
+    if promoted:
+        current_capabilities.extend(
+            ["moderation_vote", "governance_proposals", "high_trust_mutations"]
+        )
+
+    return {
+        "address": agent_address,
+        "auth_method": auth_method,
+        "requirements": PROMOTION_REQUIREMENTS,
+        "progress": progress,
+        "eligible": eligible,
+        "missing_requirements": missing_requirements,
+        "promotion": promotion,
+        "capabilities": {
+            "current": current_capabilities,
+            "on_promotion": ["moderation_vote", "governance_proposals", "high_trust_mutations"],
+        },
     }
 
 
@@ -1149,6 +1353,7 @@ async def create_post(
         gate_results=gate_results,
         signature=request.signature,
         signed_at=request.signed_at,
+        submission_kind=request.submission_kind,
     )
 
     return QueuedSubmissionResponse(
@@ -1229,6 +1434,123 @@ async def get_me(agent: dict = Depends(get_current_agent)):
         reputation=float(agent.get("reputation") or (a.reputation if a else 0.0)),
         telos=agent.get("telos") or (a.telos if a else ""),
     )
+
+
+@app.get("/agents/me/promotion")
+async def my_promotion_status(agent: dict = Depends(get_current_agent)):
+    """Show promotion readiness and capability unlock status (10/30d/1/1)."""
+    return _promotion_snapshot(agent["address"], auth_method=agent.get("auth_method", "unknown"))
+
+
+@app.post("/agents/me/promotion/claim")
+async def claim_verified_contributor_promotion(
+    req: Optional[ReasonRequest] = None,
+    agent: dict = Depends(get_current_agent),
+):
+    """
+    Claim verified-contributor unlock once all thresholds are met.
+
+    Requires Ed25519 authentication for durable identity binding.
+    """
+    if agent.get("auth_method") != "ed25519":
+        raise HTTPException(status_code=403, detail="Promotion claim requires Ed25519 auth")
+
+    reason = req.reason if req else None
+
+    snapshot = _promotion_snapshot(agent["address"], auth_method=agent.get("auth_method", "unknown"))
+    if not snapshot["eligible"]:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Promotion requirements not met",
+                "missing_requirements": snapshot["missing_requirements"],
+                "progress": snapshot["progress"],
+                "requirements": snapshot["requirements"],
+            },
+        )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    details_json = json.dumps(
+        {
+            "progress": snapshot["progress"],
+            "requirements": snapshot["requirements"],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, tier, unlocked_at
+            FROM agent_promotions
+            WHERE agent_address = ?
+            LIMIT 1
+            """,
+            (agent["address"],),
+        )
+        existing = cursor.fetchone()
+        if existing and str(existing["tier"]) == VERIFIED_CONTRIBUTOR_TIER:
+            return {
+                "status": "already_promoted",
+                "tier": VERIFIED_CONTRIBUTOR_TIER,
+                "unlocked_at": existing["unlocked_at"],
+                "capabilities": snapshot["capabilities"]["on_promotion"],
+            }
+
+        if existing:
+            cursor.execute(
+                """
+                UPDATE agent_promotions
+                SET tier = ?, reason = ?, details_json = ?, unlocked_at = ?, last_verified_at = ?
+                WHERE id = ?
+                """,
+                (
+                    VERIFIED_CONTRIBUTOR_TIER,
+                    reason,
+                    details_json,
+                    now_iso,
+                    now_iso,
+                    int(existing["id"]),
+                ),
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO agent_promotions (
+                    agent_address, tier, reason, details_json, unlocked_at, last_verified_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    agent["address"],
+                    VERIFIED_CONTRIBUTOR_TIER,
+                    reason,
+                    details_json,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+        conn.commit()
+
+    record_audit(
+        "promotion_claimed",
+        agent["address"],
+        "agent",
+        None,
+        {
+            "tier": VERIFIED_CONTRIBUTOR_TIER,
+            "requirements": PROMOTION_REQUIREMENTS,
+            "progress": snapshot["progress"],
+            "reason": reason,
+        },
+    )
+    return {
+        "status": "promoted",
+        "tier": VERIFIED_CONTRIBUTOR_TIER,
+        "unlocked_at": now_iso,
+        "capabilities": snapshot["capabilities"]["on_promotion"],
+    }
 
 
 @app.post("/agents/identity")
@@ -1721,6 +2043,7 @@ async def create_comment(
         parent_id=request.parent_id,
         signature=request.signature,
         signed_at=request.signed_at,
+        submission_kind=request.submission_kind,
     )
 
     return QueuedSubmissionResponse(
@@ -1745,6 +2068,116 @@ async def list_comments(post_id: int):
         rows = cursor.fetchall()
     
     return [CommentResponse(**dict(row)) for row in rows]
+
+
+@app.post("/comments/{comment_id}/accept-correction")
+async def accept_correction(
+    comment_id: int,
+    req: Optional[AcceptCorrectionRequest] = None,
+    agent: dict = Depends(get_current_agent),
+):
+    """
+    Accept a correction comment as resolved.
+
+    Allowed actors:
+    - post author
+    - admin override (Ed25519 + allowlist)
+    """
+    reason = req.reason if req else None
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, post_id, author_address, submission_kind, is_deleted
+            FROM comments
+            WHERE id = ?
+            """,
+            (comment_id,),
+        )
+        comment = cursor.fetchone()
+        if not comment or int(comment["is_deleted"] or 0) == 1:
+            raise HTTPException(status_code=404, detail="Comment not found")
+
+        if str(comment["submission_kind"]) != "correction":
+            raise HTTPException(status_code=400, detail="Only correction comments can be accepted")
+
+        cursor.execute(
+            """
+            SELECT id, author_address
+            FROM posts
+            WHERE id = ? AND is_deleted = 0
+            """,
+            (int(comment["post_id"]),),
+        )
+        post = cursor.fetchone()
+        if not post:
+            raise HTTPException(status_code=404, detail="Parent post not found")
+
+        is_admin_override = (
+            agent.get("auth_method") == "ed25519" and _auth.is_admin(agent["address"])
+        )
+        if not is_admin_override and post["author_address"] != agent["address"]:
+            raise HTTPException(status_code=403, detail="Only the post author can accept this correction")
+        if not is_admin_override and comment["author_address"] == agent["address"]:
+            raise HTTPException(status_code=403, detail="Self-acceptance is not allowed")
+
+        cursor.execute(
+            """
+            SELECT id, accepted_by_address, created_at
+            FROM correction_acceptances
+            WHERE comment_id = ?
+            LIMIT 1
+            """,
+            (comment_id,),
+        )
+        existing = cursor.fetchone()
+        if existing:
+            return {
+                "status": "already_accepted",
+                "comment_id": comment_id,
+                "accepted_by": existing["accepted_by_address"],
+                "accepted_at": existing["created_at"],
+            }
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            """
+            INSERT INTO correction_acceptances (
+                comment_id, post_id, comment_author_address, accepted_by_address, reason, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                comment_id,
+                int(comment["post_id"]),
+                str(comment["author_address"]),
+                agent["address"],
+                reason,
+                now_iso,
+            ),
+        )
+        conn.commit()
+
+    record_audit(
+        "correction_accepted",
+        agent["address"],
+        "comment",
+        comment_id,
+        {
+            "post_id": int(comment["post_id"]),
+            "comment_author_address": str(comment["author_address"]),
+            "accepted_by_address": agent["address"],
+            "reason": reason,
+        },
+    )
+    return {
+        "status": "accepted",
+        "comment_id": comment_id,
+        "post_id": int(comment["post_id"]),
+        "comment_author_address": str(comment["author_address"]),
+        "accepted_by": agent["address"],
+    }
 
 
 # =============================================================================

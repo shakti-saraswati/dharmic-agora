@@ -56,7 +56,7 @@ def fresh_app(tmp_path, monkeypatch):
 
     # Force reimport to pick up new DB_PATH
     for mod_name in list(sys.modules):
-        if mod_name.startswith("agora.") and mod_name != "agora.auth":
+        if mod_name.startswith("agora."):
             del sys.modules[mod_name]
     api_server = importlib.import_module("agora.api_server")
 
@@ -135,7 +135,8 @@ class TestAuthFlow:
         client, _, _ = fresh_app
         resp = client.get("/")
         assert resp.status_code == 200
-        assert "SAB" in resp.json()["name"]
+        assert "text/html" in resp.headers.get("content-type", "")
+        assert "SAB" in resp.text
 
     def test_unauthenticated_post_rejected(self, fresh_app):
         client, _, _ = fresh_app
@@ -270,6 +271,126 @@ class TestComments:
         }, headers=user["headers"])
         assert resp.status_code == 201
         assert resp.json()["status"] == "pending"
+
+
+# =============================================================================
+# PROMOTION FLOW TESTS
+# =============================================================================
+
+class TestPromotionFlow:
+    def test_correction_acceptance_and_promotion_claim(self, fresh_app, monkeypatch):
+        client, api_server, _ = fresh_app
+        admin = _register_and_auth(api_server, monkeypatch, is_admin=True)
+        post_author = _register_and_auth(api_server)
+        candidate = _register_and_auth(api_server)
+
+        # Backdate agent to satisfy the 30-day activity threshold.
+        backdated = "2025-01-01T00:00:00+00:00"
+        import sqlite3
+        conn = sqlite3.connect(api_server._auth.db_path)
+        conn.execute("UPDATE agents SET created_at = ? WHERE address = ?", (backdated, candidate["address"]))
+        conn.commit()
+        conn.close()
+
+        # Candidate: 1 synthesis + 9 general approved posts => 10 contributions.
+        for idx in range(10):
+            content = f"Promotion contribution {idx}: durable synthesis quality and evidence."
+            sig, signed_at = _sign_content(candidate, content)
+            payload = {
+                "content": content,
+                "signature": sig,
+                "signed_at": signed_at,
+                "submission_kind": "synthesis" if idx == 0 else "general",
+            }
+            queued = client.post("/posts", json=payload, headers=candidate["headers"])
+            assert queued.status_code == 201
+            queue_id = queued.json()["queue_id"]
+            approved = client.post(
+                f"/admin/approve/{queue_id}",
+                json={"reason": "promotion-fixture"},
+                headers=admin["headers"],
+            )
+            assert approved.status_code == 200
+
+        # Create a post by another agent so candidate can submit a correction.
+        base_content = "Original claim needing refinement for correction integrity."
+        base_sig, base_signed_at = _sign_content(post_author, base_content)
+        base_post = client.post(
+            "/posts",
+            json={"content": base_content, "signature": base_sig, "signed_at": base_signed_at},
+            headers=post_author["headers"],
+        )
+        assert base_post.status_code == 201
+        base_queue_id = base_post.json()["queue_id"]
+        approve_base = client.post(
+            f"/admin/approve/{base_queue_id}",
+            json={"reason": "baseline"},
+            headers=admin["headers"],
+        )
+        assert approve_base.status_code == 200
+        posts = client.get("/posts").json()
+        post_id = next(p["id"] for p in posts if p["author_address"] == post_author["address"])
+
+        # Candidate submits a correction comment and it gets approved.
+        correction_text = "Correction: the premise misses counterevidence from the validation run."
+        correction_sig, correction_signed_at = _sign_content(
+            candidate,
+            correction_text,
+            content_type="comment",
+            post_id=post_id,
+        )
+        correction = client.post(
+            f"/posts/{post_id}/comment",
+            json={
+                "content": correction_text,
+                "signature": correction_sig,
+                "signed_at": correction_signed_at,
+                "submission_kind": "correction",
+            },
+            headers=candidate["headers"],
+        )
+        assert correction.status_code == 201
+        correction_queue_id = correction.json()["queue_id"]
+        approve_correction = client.post(
+            f"/admin/approve/{correction_queue_id}",
+            json={"reason": "valid correction"},
+            headers=admin["headers"],
+        )
+        assert approve_correction.status_code == 200
+        correction_comment_id = approve_correction.json()["published_content_id"]
+
+        # Post author accepts the correction.
+        accepted = client.post(
+            f"/comments/{correction_comment_id}/accept-correction",
+            json={"reason": "accepted and integrated"},
+            headers=post_author["headers"],
+        )
+        assert accepted.status_code == 200
+        assert accepted.json()["status"] == "accepted"
+
+        # Candidate is now eligible.
+        promotion = client.get("/agents/me/promotion", headers=candidate["headers"])
+        assert promotion.status_code == 200
+        promo_data = promotion.json()
+        assert promo_data["eligible"] is True
+        assert promo_data["progress"]["gate_passed_contributions"] >= 10
+        assert promo_data["progress"]["accepted_corrections"] >= 1
+        assert promo_data["progress"]["gate_passed_syntheses"] >= 1
+        assert promo_data["progress"]["active_days"] >= 30
+
+        claim = client.post(
+            "/agents/me/promotion/claim",
+            json={"reason": "promotion threshold met"},
+            headers=candidate["headers"],
+        )
+        assert claim.status_code == 200
+        assert claim.json()["status"] in {"promoted", "already_promoted"}
+
+        promoted_state = client.get("/agents/me/promotion", headers=candidate["headers"])
+        assert promoted_state.status_code == 200
+        promoted_data = promoted_state.json()
+        assert promoted_data["promotion"]["tier"] == "verified_contributor"
+        assert "high_trust_mutations" in promoted_data["capabilities"]["current"]
 
 
 # =============================================================================

@@ -47,6 +47,13 @@ class ModerationStore:
     def _init_db(self) -> None:
         with self._conn() as conn:
             cursor = conn.cursor()
+
+            def ensure_column(table: str, column_name: str, column_def: str) -> None:
+                cursor.execute(f"PRAGMA table_info({table})")
+                existing = {row[1] for row in cursor.fetchall()}
+                if column_name not in existing:
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
+
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS moderation_queue (
@@ -66,9 +73,15 @@ class ModerationStore:
                     reviewer_address TEXT,
                     published_content_id INTEGER,
                     signature TEXT,
-                    signed_at TEXT
+                    signed_at TEXT,
+                    submission_kind TEXT NOT NULL DEFAULT 'general'
                 )
                 """
+            )
+            ensure_column(
+                "moderation_queue",
+                "submission_kind",
+                "submission_kind TEXT NOT NULL DEFAULT 'general'",
             )
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_mod_queue_status ON moderation_queue(status)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_mod_queue_author ON moderation_queue(author_address)")
@@ -85,6 +98,7 @@ class ModerationStore:
         parent_id: Optional[int] = None,
         signature: Optional[str] = None,
         signed_at: Optional[str] = None,
+        submission_kind: str = "general",
     ) -> Dict[str, Any]:
         created_at = created_at or datetime.now(timezone.utc).isoformat()
         with self._conn() as conn:
@@ -94,8 +108,8 @@ class ModerationStore:
                 INSERT INTO moderation_queue (
                     content_type, content, author_address, gate_evidence_hash,
                     gate_results_json, status, reason, created_at, post_id,
-                    parent_id, signature, signed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    parent_id, signature, signed_at, submission_kind
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     content_type,
@@ -110,6 +124,7 @@ class ModerationStore:
                     parent_id,
                     signature,
                     signed_at,
+                    submission_kind,
                 ),
             )
             queue_id = cursor.lastrowid
@@ -171,8 +186,16 @@ class ModerationStore:
                 if item["content_type"] == "post":
                     cursor.execute(
                         """
-                        INSERT INTO posts (content, author_address, gate_evidence_hash, created_at, signature, signed_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        INSERT INTO posts (
+                            content,
+                            author_address,
+                            gate_evidence_hash,
+                            created_at,
+                            signature,
+                            signed_at,
+                            submission_kind
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             item["content"],
@@ -181,14 +204,25 @@ class ModerationStore:
                             created_at,
                             item.get("signature"),
                             item.get("signed_at"),
+                            item.get("submission_kind", "general"),
                         ),
                     )
                     published_id = cursor.lastrowid
                 else:
                     cursor.execute(
                         """
-                        INSERT INTO comments (post_id, content, author_address, gate_evidence_hash, parent_id, created_at, signature, signed_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO comments (
+                            post_id,
+                            content,
+                            author_address,
+                            gate_evidence_hash,
+                            parent_id,
+                            created_at,
+                            signature,
+                            signed_at,
+                            submission_kind
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             item["post_id"],
@@ -199,6 +233,7 @@ class ModerationStore:
                             created_at,
                             item.get("signature"),
                             item.get("signed_at"),
+                            item.get("submission_kind", "general"),
                         ),
                     )
                     published_id = cursor.lastrowid

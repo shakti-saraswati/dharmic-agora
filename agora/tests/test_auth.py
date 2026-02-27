@@ -732,7 +732,12 @@ class TestDatabase:
         assert row is not None
         stored_ref, stored_hash = row
         assert stored_ref != raw_token
-        assert stored_hash == hashlib.sha256(raw_token.encode()).hexdigest()
+        expected_sha256 = hashlib.sha256(raw_token.encode()).hexdigest()
+        assert (
+            stored_hash in {expected_sha256, f"sha256${expected_sha256}"}
+            or stored_hash.startswith("$2")
+        )
+        assert auth.verify_simple_token(raw_token) is not None
 
     def test_jwt_secret_file_permissions_strict(self, temp_db, monkeypatch, tmp_path):
         """JWT secret should be created with owner-only permissions (0600)."""

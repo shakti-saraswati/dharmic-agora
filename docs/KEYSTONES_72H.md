@@ -5,21 +5,22 @@ selection_criteria: kernel_integrity_first
 deadline: 2026-02-17T06:00:00Z
 links:
   - [[49_TO_KEYSTONES_MAP]]
+  - [[integration/keystone_map.py]]
   - [[agent_core/docs/49_NODES]]
   - [[UPSTREAMS_v0]]
 keystone_map:
-  K01_temporalio: "Node_04_Production_Emergence"
-  K02_crewai: "Node_01_AI_Swarm_Emergence"
-  K03_promptfoo: "Node_05_Science_Emergence"
-  K04_deepeval: "Node_12_Science_Symbiosis"
-  K05_chroma: "Node_03_Knowledge_Emergence"
-  K06_mem0ai: "Node_17_Knowledge_Resilience"
-  K07_llmguard: "Node_16_Philosophy_Resilience"
-  K08_guardrailsai: "Node_23_Philosophy_Telos"
-  K09_litellm: "Node_08_AI_Swarm_Symbiosis"
-  K10_agentops: "Node_36_AI_Kaizen"
-  K11_mastra: "Node_11_Production_Symbiosis"
-  K12_agno: "Node_32_Production_Kaizen"
+  K01: "Node_04_Production_Emergence"
+  K02: "Node_01_AI_Swarm_Emergence"
+  K03: "Node_05_Science_Emergence"
+  K04: "Node_12_Science_Symbiosis"
+  K05: "Node_03_Knowledge_Emergence"
+  K06: "Node_17_Knowledge_Resilience"
+  K07: "Node_16_Philosophy_Resilience"
+  K08: "Node_23_Philosophy_Telos"
+  K09: "Node_08_AI_Swarm_Symbiosis"
+  K10: "Node_36_AI_Kaizen"
+  K11: "Node_11_Production_Symbiosis"
+  K12: "Node_32_Production_Kaizen"
 ---
 
 # KEYSTONES 72H — Critical Path Dependencies

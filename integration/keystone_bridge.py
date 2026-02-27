@@ -12,21 +12,10 @@ Usage:
 
 from pathlib import Path
 
-# Mapping from 49_TO_KEYSTONES_MAP.md
-KEYSTONE_TO_NODE = {
-    "K01": {"keystone": "temporalio/temporal", "node": "Node_04", "domain": "Production", "theme": "Emergence"},
-    "K02": {"keystone": "crewai/crewai", "node": "Node_01", "domain": "AI/Swarm", "theme": "Emergence"},
-    "K03": {"keystone": "promptfoo/promptfoo", "node": "Node_05", "domain": "Science", "theme": "Emergence"},
-    "K04": {"keystone": "confident-ai/deepeval", "node": "Node_12", "domain": "Science", "theme": "Symbiosis"},
-    "K05": {"keystone": "chroma-core/chroma", "node": "Node_03", "domain": "Knowledge", "theme": "Emergence"},
-    "K06": {"keystone": "mem0ai/mem0", "node": "Node_17", "domain": "Knowledge", "theme": "Resilience"},
-    "K07": {"keystone": "llmguard/llmguard", "node": "Node_16", "domain": "Philosophy", "theme": "Resilience"},
-    "K08": {"keystone": "guardrailsai/guardrails", "node": "Node_23", "domain": "Philosophy", "theme": "Telos"},
-    "K09": {"keystone": "litellm/litellm", "node": "Node_08", "domain": "AI/Swarm", "theme": "Symbiosis"},
-    "K10": {"keystone": "agentops/agentops", "node": "Node_36", "domain": "AI/Swarm", "theme": "Kaizen"},
-    "K11": {"keystone": "mastra/mastra", "node": "Node_11", "domain": "Production", "theme": "Symbiosis"},
-    "K12": {"keystone": "agno/agno", "node": "Node_32", "domain": "Production", "theme": "Kaizen"},
-}
+try:
+    from .keystone_map import KEYSTONE_TO_NODE
+except ImportError:  # Script execution fallback.
+    from keystone_map import KEYSTONE_TO_NODE
 
 # Reverse mapping
 NODE_TO_KEYSTONES = {}
