@@ -6,6 +6,7 @@
   "required": [
     "claim_id",
     "node_id",
+    "node_coordinate",
     "title",
     "status",
     "proposal_hash",
@@ -15,6 +16,10 @@
   "properties": {
     "claim_id": { "type": "string", "minLength": 3 },
     "node_id": { "type": "string", "minLength": 3 },
+    "node_coordinate": {
+      "type": "string",
+      "pattern": "^Node_(0[1-9]|[1-3][0-9]|4[0-9])$"
+    },
     "title": { "type": "string", "minLength": 5 },
     "lane": {
       "type": "string",
@@ -55,9 +60,13 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["node_id", "witness_ref"],
+        "required": ["node_id", "node_coordinate", "witness_ref"],
         "properties": {
           "node_id": { "type": "string" },
+          "node_coordinate": {
+            "type": "string",
+            "pattern": "^Node_(0[1-9]|[1-3][0-9]|4[0-9])$"
+          },
           "witness_ref": { "type": "string" }
         }
       }

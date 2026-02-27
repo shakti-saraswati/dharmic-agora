@@ -97,6 +97,7 @@ This enables:
 
 Promotion requests are explicit claim metadata, not inferred state:
 - set `requested_stage` (or `requested_stages`) in claim packets
+- include `node_coordinate` in canonical `Node_01..Node_49` form
 - optional nested form: `promotion.requested_stage(s)`
 - CI/release validation enforces thresholds for any requested promotion
 - easy helper: `python3 scripts/new_claim.py --node ... --title ...`

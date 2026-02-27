@@ -15,7 +15,6 @@ import hmac
 import json
 import math
 import os
-import re
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -38,6 +37,7 @@ try:
     from agora.pilot import PilotManager
     from agora.convergence import ConvergenceStore
     from agora.federation import federation_router
+    from agora.node_coordinates import normalize_node_coordinate
 except ImportError:
     # Allow running from parent directory
     import sys
@@ -50,6 +50,7 @@ except ImportError:
     from agora.pilot import PilotManager
     from agora.convergence import ConvergenceStore
     from agora.federation import federation_router
+    from agora.node_coordinates import normalize_node_coordinate
 
 # =============================================================================
 # CONFIGURATION
@@ -68,7 +69,6 @@ PROMOTION_REQUIREMENTS = {
     "gate_passed_syntheses": 1,
 }
 VERIFIED_CONTRIBUTOR_TIER = "verified_contributor"
-NODE_COORDINATE_RE = re.compile(r"^node[_-]?(\d{1,2})(?:_.*)?$", re.IGNORECASE)
 
 # =============================================================================
 # DATABASE SETUP
@@ -905,35 +905,12 @@ def _parse_iso8601(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
-def _normalize_node_coordinate(value: Optional[str]) -> Optional[str]:
-    """Normalize coordinate variants to canonical Node_XX format."""
-    if value is None:
-        return None
-    raw = str(value).strip()
-    if not raw:
-        return None
-
-    if raw.isdigit():
-        idx = int(raw)
-        if 1 <= idx <= 49:
-            return f"Node_{idx:02d}"
-        raise ValueError("node_coordinate index must be between 1 and 49")
-
-    match = NODE_COORDINATE_RE.match(raw)
-    if not match:
-        raise ValueError("node_coordinate must be Node_01..Node_49")
-    idx = int(match.group(1))
-    if idx < 1 or idx > 49:
-        raise ValueError("node_coordinate index must be between 1 and 49")
-    return f"Node_{idx:02d}"
-
-
 def _resolve_submission_routing(
     submission_kind: str,
     node_coordinate: Optional[str],
 ) -> Optional[str]:
     try:
-        normalized = _normalize_node_coordinate(node_coordinate)
+        normalized = normalize_node_coordinate(node_coordinate)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1457,7 +1434,7 @@ async def list_posts(
     normalized_coordinate = None
     if node_coordinate is not None:
         try:
-            normalized_coordinate = _normalize_node_coordinate(node_coordinate)
+            normalized_coordinate = normalize_node_coordinate(node_coordinate)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
@@ -2159,7 +2136,7 @@ async def list_comments(
     normalized_coordinate = None
     if node_coordinate is not None:
         try:
-            normalized_coordinate = _normalize_node_coordinate(node_coordinate)
+            normalized_coordinate = normalize_node_coordinate(node_coordinate)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 

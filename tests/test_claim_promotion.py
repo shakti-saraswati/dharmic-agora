@@ -24,6 +24,7 @@ def _base_claim(stage: str) -> dict:
     return {
         "claim_id": "claim-test-001",
         "node_id": "anchor-03-ml-intelligence-engineering",
+        "node_coordinate": "Node_03",
         "title": "Depth concentration hypothesis",
         "lane": "papers",
         "status": "witnessed",
@@ -32,8 +33,16 @@ def _base_claim(stage: str) -> dict:
         "cross_model_affirm_count": 3,
         "non_adjacent_witness_count": 2,
         "cross_node_refs": [
-            {"node_id": "anchor-05-ecology-earth-systems", "witness_ref": "wit-eco-1"},
-            {"node_id": "anchor-07-dharmic-jain-epistemics", "witness_ref": "wit-dharma-1"},
+            {
+                "node_id": "anchor-05-ecology-earth-systems",
+                "node_coordinate": "Node_05",
+                "witness_ref": "wit-eco-1",
+            },
+            {
+                "node_id": "anchor-07-dharmic-jain-epistemics",
+                "node_coordinate": "Node_07",
+                "witness_ref": "wit-dharma-1",
+            },
         ],
         "artifact_refs": ["artifacts/rv_measurement_v4.py"],
         "red_team_refs": ["redteam/angle-1.md", "redteam/angle-2.md"],
@@ -101,4 +110,3 @@ def test_require_stage_fails_claim_without_requested_stage(tmp_path: Path) -> No
     report = run_promotion_enforcement(nodes_root=tmp_path / "nodes", require_stage=True, now=NOW)
     assert report.passed is False
     assert any("missing requested_stage" in f.get("error", "") for f in report.failures)
-

@@ -26,6 +26,7 @@ def _base_claim() -> dict:
     return {
         "claim_id": "claim-rv-depth-001",
         "node_id": "anchor-03-ml-intelligence-engineering",
+        "node_coordinate": "Node_03",
         "title": "Depth concentration hypothesis",
         "lane": "papers",
         "status": "witnessed",
@@ -36,10 +37,12 @@ def _base_claim() -> dict:
         "cross_node_refs": [
             {
                 "node_id": "anchor-05-ecology-earth-systems",
+                "node_coordinate": "Node_05",
                 "witness_ref": "wit-eco-001",
             },
             {
                 "node_id": "anchor-07-dharmic-jain-epistemics",
+                "node_coordinate": "Node_07",
                 "witness_ref": "wit-dharma-001",
             },
         ],
@@ -164,3 +167,19 @@ def test_unknown_stage_fails() -> None:
     result = evaluate_claim_for_stage(claim, "unknown-stage", now=NOW)
     assert result.passed is False
     assert "unknown stage" in result.errors[0]
+
+
+def test_missing_node_coordinate_fails() -> None:
+    claim = _base_claim()
+    claim.pop("node_coordinate", None)
+    result = evaluate_claim_for_stage(claim, STAGE_PAPER_INTERNAL, now=NOW)
+    assert result.passed is False
+    assert any("node_coordinate" in msg for msg in result.errors)
+
+
+def test_cross_node_coordinate_mismatch_fails() -> None:
+    claim = _base_claim()
+    claim["cross_node_refs"][0]["node_coordinate"] = "Node_07"
+    result = evaluate_claim_for_stage(claim, STAGE_PAPER_INTERNAL, now=NOW)
+    assert result.passed is False
+    assert any("cross_node_refs node_id" in msg for msg in result.errors)

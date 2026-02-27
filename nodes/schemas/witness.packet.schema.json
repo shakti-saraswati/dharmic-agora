@@ -7,7 +7,9 @@
     "witness_id",
     "claim_id",
     "node_id",
+    "node_coordinate",
     "witness_node_id",
+    "witness_node_coordinate",
     "evaluation",
     "created_at"
   ],
@@ -15,7 +17,15 @@
     "witness_id": { "type": "string", "minLength": 3 },
     "claim_id": { "type": "string", "minLength": 3 },
     "node_id": { "type": "string", "minLength": 3 },
+    "node_coordinate": {
+      "type": "string",
+      "pattern": "^Node_(0[1-9]|[1-3][0-9]|4[0-9])$"
+    },
     "witness_node_id": { "type": "string", "minLength": 3 },
+    "witness_node_coordinate": {
+      "type": "string",
+      "pattern": "^Node_(0[1-9]|[1-3][0-9]|4[0-9])$"
+    },
     "evaluation": {
       "type": "string",
       "enum": ["affirm", "deny", "abstain", "sublate"]

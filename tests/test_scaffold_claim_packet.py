@@ -29,6 +29,7 @@ def test_scaffold_claim_packet_dry_run_succeeds() -> None:
     assert payload["status"] == "ok"
     assert payload["dry_run"] is True
     assert payload["requested_stage"] == "paper_internal_draft"
+    assert payload["node_coordinate"] == "Node_03"
     assert payload["claim_path"].endswith("claim-test-dry-run-scaffold-v1.json")
 
 

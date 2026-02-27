@@ -29,6 +29,7 @@ from agora.node_governance import (  # noqa: E402
     STAGE_VENTURE_PROPOSAL,
     load_non_adjacent_pairs,
 )
+from agora.node_coordinates import resolve_node_coordinate  # noqa: E402
 
 
 def _iso(dt: datetime) -> str:
@@ -210,14 +211,26 @@ def _build_witness_packets(
     created_at: str,
 ) -> List[Dict[str, str]]:
     refs: List[Dict[str, str]] = []
+    claim_coordinate = resolve_node_coordinate(
+        node_id=node_id,
+        node_coordinate=None,
+        required=True,
+    )
     for cross_node in cross_nodes:
+        cross_coordinate = resolve_node_coordinate(
+            node_id=cross_node,
+            node_coordinate=None,
+            required=True,
+        )
         witness_id = f"wit-{claim_id}-from-{cross_node}"
         witness_path = REPO_ROOT / "nodes" / "anchors" / cross_node / "witness" / f"{witness_id}.json"
         packet = {
             "witness_id": witness_id,
             "claim_id": claim_id,
             "node_id": node_id,
+            "node_coordinate": claim_coordinate,
             "witness_node_id": cross_node,
+            "witness_node_coordinate": cross_coordinate,
             "evaluation": "affirm",
             "confidence": 0.82,
             "rationale": "Cross-node witness affirms stage request based on artifact and anti-drift checks.",
@@ -227,6 +240,7 @@ def _build_witness_packets(
         refs.append(
             {
                 "node_id": cross_node,
+                "node_coordinate": cross_coordinate,
                 "witness_ref": str(witness_path.relative_to(REPO_ROOT)),
             }
         )
@@ -277,6 +291,11 @@ def main() -> int:
     created_at = _iso(now)
     claim_id = args.claim_id.strip() or _derive_claim_id(args.node, args.title, now)
     proposal_hash = hashlib.sha256(f"{claim_id}:{created_at}".encode("utf-8")).hexdigest()
+    node_coordinate = resolve_node_coordinate(
+        node_id=args.node,
+        node_coordinate=None,
+        required=True,
+    )
 
     cross_nodes = _resolve_cross_nodes(args.node, args.cross_node)
     support_refs = _create_stub_files(
@@ -304,6 +323,7 @@ def main() -> int:
     claim: Dict[str, Any] = {
         "claim_id": claim_id,
         "node_id": args.node,
+        "node_coordinate": node_coordinate,
         "title": args.title,
         "lane": lane,
         "status": "witnessed",
@@ -337,6 +357,7 @@ def main() -> int:
         "dry_run": bool(args.dry_run),
         "claim_id": claim_id,
         "claim_path": str(claim_path.relative_to(REPO_ROOT)),
+        "node_coordinate": node_coordinate,
         "requested_stage": args.stage,
         "cross_nodes": cross_nodes,
         "validate_command": (

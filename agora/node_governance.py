@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Set
 
 import yaml
+from .node_coordinates import resolve_node_coordinate
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 THRESHOLDS_PATH = REPO_ROOT / "nodes" / "cross_node" / "thresholds.yaml"
@@ -169,6 +170,53 @@ def _validate_non_adjacent_integrity(metrics: Mapping[str, Any], errors: List[st
         )
 
 
+def _validate_node_coordinate_integrity(
+    claim: Mapping[str, Any],
+    metrics: Dict[str, Any],
+    errors: List[str],
+) -> None:
+    node_id = str(claim.get("node_id", ""))
+    if "node_coordinate" not in claim:
+        errors.append("missing node_coordinate in claim packet")
+    try:
+        metrics["node_coordinate"] = resolve_node_coordinate(
+            node_id=node_id,
+            node_coordinate=claim.get("node_coordinate"),
+            required=True,
+        )
+    except ValueError as exc:
+        metrics["node_coordinate"] = str(claim.get("node_coordinate", ""))
+        errors.append(str(exc))
+
+    refs = claim.get("cross_node_refs", [])
+    explicit_cross_coords = 0
+    if isinstance(refs, list):
+        for ref in refs:
+            if not isinstance(ref, dict):
+                continue
+            witness_node_id = str(ref.get("node_id", ""))
+            if not witness_node_id:
+                continue
+            if "node_coordinate" not in ref:
+                errors.append(
+                    f"cross_node_refs node_id {witness_node_id} is missing node_coordinate"
+                )
+            raw_coordinate = ref.get("node_coordinate")
+            if raw_coordinate:
+                explicit_cross_coords += 1
+            try:
+                resolve_node_coordinate(
+                    node_id=witness_node_id,
+                    node_coordinate=raw_coordinate,
+                    required=True,
+                )
+            except ValueError as exc:
+                errors.append(
+                    f"cross_node_refs node_id {witness_node_id} has invalid node_coordinate: {exc}"
+                )
+    metrics["cross_node_coordinate_explicit_count"] = explicit_cross_coords
+
+
 def _check_paper_internal(
     claim: Mapping[str, Any],
     thresholds: Mapping[str, Any],
@@ -310,6 +358,7 @@ def evaluate_claim_for_stage(
     errors: List[str] = []
     metrics = _common_metrics(claim, loaded_non_adjacent)
     _validate_non_adjacent_integrity(metrics, errors)
+    _validate_node_coordinate_integrity(claim, metrics, errors)
 
     if stage == STAGE_PAPER_INTERNAL:
         _check_paper_internal(claim, loaded_thresholds, metrics, errors)
