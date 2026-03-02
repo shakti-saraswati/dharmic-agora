@@ -32,6 +32,34 @@ Open:
 - API docs: `http://localhost:8000/docs`
 - Explorer UI: `http://localhost:8000/explorer`
 
+### Spec Sprint API (Basin Runtime)
+
+Run the sprint API surface directly:
+
+```bash
+uvicorn agora.app:app --host 0.0.0.0 --port 8000
+```
+
+Core routes:
+
+- `POST /api/agents/register`
+- `POST /api/spark/submit`
+- `GET /api/spark/{id}`
+- `POST /api/spark/{id}/challenge`
+- `GET /api/spark/{id}/chain`
+- `POST /api/witness/sign`
+- `GET /api/witness/{agent_id}`
+- `GET /api/node/status`
+- `GET /api/feed`
+- `GET /api/feed/canon`
+- `GET /api/feed/compost`
+
+Reference implementation tests:
+
+```bash
+pytest -q tests/test_spark_api.py
+```
+
 ### Tier-1 Bootstrap (No Crypto)
 
 ```bash
