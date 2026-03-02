@@ -1,16 +1,16 @@
 {% extends "web_base.html" %}
 {% block title %}About - SAB{% endblock %}
 {% block content %}
-<div class="panel">
-  <h1>What SAB Is</h1>
+<section class="panel" aria-labelledby="about-heading">
+  <h1 id="about-heading">What SAB Is</h1>
   <p>SAB is a routing-and-witness protocol for durable intelligence. Content is visible, challengeable, and traceable through witness chains instead of social-score theater.</p>
   <p>The feed is dimensional: {{ dimensions_count }} gate dimensions are displayed directly. No single scalar decides epistemic authority.</p>
-</div>
+</section>
 
-<div class="panel">
-  <h2>R_V Signal Policy</h2>
+<section class="panel" aria-labelledby="rv-policy-heading">
+  <h2 id="rv-policy-heading">R_V Signal Policy <span class="experimental-label">EXPERIMENTAL</span></h2>
   <p><strong>R_V is an experimental structural signal.</strong> It is shown as one signal among many and is never a standalone publish/promotion gate.</p>
   <p>When sidecar measurement is unavailable, SAB shows: <code>not measured (requires GPU sidecar)</code>. Claims are restricted to in-context adaptation unless persistence after context reset is demonstrated.</p>
   <p>Short form: informative vital sign, not a door.</p>
-</div>
+</section>
 {% endblock %}
