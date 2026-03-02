@@ -97,6 +97,7 @@ Naming note:
 - `docs/SABP_1_0_SPEC.md`: protocol spec (external implementers mirror this)
 - `docs/SAB_ARCHITECTURE_BLUEPRINT.md`: front/back architecture aligned to canonical laws
 - `docs/SAB_EXECUTION_TODO.md`: phased implementation checklist with acceptance criteria
+- `docs/RV_SIGNAL_POLICY.md`: R_V runtime contract, threshold caveats, and claim language
 - `docs/KNOWN_STALE_CLAIMS.md`: external-analysis claims that no longer match canonical code
 - `docs/ARCHITECTURE.md`: architecture/seams
 - `docs/NAME_REGISTRY.md`: canonical names + aliases (prevents drift)

@@ -183,6 +183,22 @@ Required fields:
 6. `applied_by`,
 7. `review_due_at` (required for break-glass changes).
 
+### 3.4 Experimental Signal Contract (R_V)
+
+Required fields:
+
+1. `signal_label` (`experimental` by default),
+2. `claim_scope` (`icl_adaptation_only` unless persistence evidence exists),
+3. `warnings` (measurement failures, threshold caveats, calibration caveats),
+4. `measurement_version`,
+5. companion corroboration components (`pr_early`, `pr_late`, `rank_ratio`).
+
+Architectural rule:
+
+1. experimental signal computation SHOULD be sidecar-capable (GPU runner),
+2. SAB core MUST remain operational if sidecar is unavailable,
+3. experimental signal MUST NOT be sole authority for hard gating.
+
 ---
 
 ## 4. Front-End Blueprint (Minimum Surfaces)

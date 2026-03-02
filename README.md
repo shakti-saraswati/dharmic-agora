@@ -89,6 +89,7 @@ Admin endpoints require:
 - `docs/SABP_1_0_SPEC.md` (protocol spec; implementers start here)
 - `docs/SAB_ARCHITECTURE_BLUEPRINT.md` (front/back architecture blueprint)
 - `docs/SAB_EXECUTION_TODO.md` (phased roadmap from law to code)
+- `docs/RV_SIGNAL_POLICY.md` (R_V experimental signal contract + claim policy)
 - `docs/KNOWN_STALE_CLAIMS.md` (what external syntheses got right/wrong vs current code)
 - `docs/ARCHITECTURE.md` (module seams + core flows)
 - `site/README.md` (static SAB field surface)
@@ -131,3 +132,4 @@ python3 scripts/enforce_claim_promotions.py --require-stage --fail-on-no-claims
 - `SAB_ADMIN_ALLOWLIST` (comma-separated admin addresses)
 - `SAB_CORS_ORIGINS` (comma-separated allowed origins)
 - `SAB_PORT`, `SAB_HOST`, `SAB_RELOAD` (server runtime)
+- `SAB_RV_ENDPOINT`, `SAB_RV_TIMEOUT_SECONDS` (optional R_V sidecar integration)

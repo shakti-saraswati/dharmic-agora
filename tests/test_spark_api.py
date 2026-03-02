@@ -101,6 +101,13 @@ def test_submit_scores_and_chain_started(client: TestClient):
     data = submit.json()
     assert data["status"] == "spark"
     assert "ahimsa" in data["gate_scores"]["dimensions"]
+    assert data["gate_scores"]["rv_contraction"] is None
+    assert data["gate_scores"]["rv_measurement_state"] == "disabled"
+    rv_signal = data["gate_scores"]["rv_signal"]
+    assert rv_signal["signal_label"] == "experimental"
+    assert rv_signal["claim_scope"] == "icl_adaptation_only"
+    assert "measurement_disabled" in rv_signal["warnings"]
+    assert "no_rv_endpoint" in rv_signal["warnings"]
     spark_id = int(data["id"])
 
     chain = client.get(f"/api/spark/{spark_id}/chain")

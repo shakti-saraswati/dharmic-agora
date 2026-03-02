@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from .config import SAB_VERSION, get_db_path
 from .gates import ALL_GATES, GateResult, calculate_quality, verify_content
+from .rv_signal import measure_rv_signal
 
 try:
     from nacl.encoding import HexEncoder
@@ -284,7 +285,11 @@ def _load_gate_scores(raw: str) -> Dict[str, Any]:
     return parsed
 
 
-def _build_gate_payload(evidence: List[Any], evidence_hash: str) -> Dict[str, Any]:
+def _build_gate_payload(
+    evidence: List[Any],
+    evidence_hash: str,
+    rv_signal: Dict[str, Any],
+) -> Dict[str, Any]:
     dimensions: Dict[str, Any] = {}
     for item in evidence:
         if item.result == GateResult.PASSED:
@@ -301,13 +306,24 @@ def _build_gate_payload(evidence: List[Any], evidence_hash: str) -> Dict[str, An
 
     composite = round(float(calculate_quality(evidence)), 6)
     ahimsa_state = dimensions.get("ahimsa", {}).get("result", "passed")
+    rv_value = rv_signal.get("rv")
+    warning_set = {str(w) for w in rv_signal.get("warnings", []) if isinstance(w, str)}
+    if rv_value is not None:
+        rv_state = "measured"
+    elif "measurement_disabled" in warning_set:
+        rv_state = "disabled"
+    elif any(w.startswith("measurement_failed") for w in warning_set):
+        rv_state = "failed"
+    else:
+        rv_state = "uncertain"
     return {
         "dimensions": dimensions,
         "composite": composite,
         "evidence_hash": evidence_hash,
         "ahimsa_passed": ahimsa_state != "failed",
-        "rv_contraction": None,  # integration point; to be wired to external R_V measurement service
-        "rv_measurement_state": "stubbed",
+        "rv_contraction": rv_value,
+        "rv_measurement_state": rv_state,
+        "rv_signal": rv_signal,
     }
 
 
@@ -527,7 +543,8 @@ async def submit_spark(req: SparkSubmitRequest) -> Dict[str, Any]:
             "recent_content_hashes": recent_hashes,
         }
         passed, evidence, evidence_hash = verify_content(req.content, req.author_id, gate_context)
-        gate_scores = _build_gate_payload(evidence, evidence_hash)
+        rv_signal = measure_rv_signal(req.content)
+        gate_scores = _build_gate_payload(evidence, evidence_hash, rv_signal)
         status_value = "spark"
         if not gate_scores.get("ahimsa_passed", True):
             status_value = "compost"

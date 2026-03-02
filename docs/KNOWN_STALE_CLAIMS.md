@@ -57,6 +57,23 @@ References:
 - `agora/api_server.py`
 - `agora/tests/test_integration.py`
 
+### Stale Claim 4
+
+Claim:
+
+- "Transmission experiments over API models can claim structural transfer between agents."
+
+Current canonical state:
+
+- Canonical policy restricts this to in-context adaptation claims unless persistence after context reset is demonstrated.
+- Runtime R_V payloads are explicitly labeled `experimental` and `icl_adaptation_only`.
+
+References:
+
+- `docs/RV_SIGNAL_POLICY.md`
+- `docs/SABP_1_0_CANONICAL.md`
+- `agora/rv_signal.py`
+
 ---
 
 ## Still-Open Conflicts (Not stale; active)

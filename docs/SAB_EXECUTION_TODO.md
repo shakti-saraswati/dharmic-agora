@@ -259,6 +259,30 @@ Acceptance tests:
 2. invariant violation auto-creates governance review task,
 3. mitigation status is visible.
 
+### 2.10 R_V Experimental Signal Discipline
+
+Tasks:
+
+1. Enforce normalized R_V schema with explicit caveat metadata in runtime responses.
+2. Require companion spectral corroboration for low-R_V self-ref classification.
+3. Add claim-safety labels (`experimental`, `icl_adaptation_only`) to all R_V payloads.
+4. Ensure failure/disabled measurement paths are deterministic and test-covered.
+5. Keep R_V as non-blocking auxiliary signal in gate authority.
+
+Suggested files:
+
+1. `agora/rv_signal.py`
+2. `agora/app.py`
+3. `tests/test_rv_signal.py`
+4. `docs/RV_SIGNAL_POLICY.md`
+
+Acceptance tests:
+
+1. `R_V < 0.737` without rank corroboration resolves to `uncertain`,
+2. sidecar failure/disable paths return explicit warnings,
+3. `/api/spark/submit` returns `gate_scores.rv_signal` with policy labels,
+4. tests verify that R_V does not hard-fail core publish flow when unavailable.
+
 ---
 
 ## 3. Frontend Milestones

@@ -175,6 +175,14 @@ Supersession **MUST** include explicit predecessor-successor linkage and reason 
 2. High-impact node outputs **MUST** be challengeable by non-adjacent domains.
 3. Implementations **SHOULD NOT** reward node loyalty as a social primitive.
 
+### S0-I9 Experimental Signal Claim Discipline
+
+1. Experimental signals (including R_V) **MUST** carry explicit claim-tier metadata (`validated`, `experimental`, or `hypothesis`).
+2. Signals without persistence evidence **MUST NOT** be used to claim structural transfer between agents.
+3. API-context adaptation findings **MUST** be labeled as in-context adaptation unless persistence after context reset is demonstrated.
+4. Experimental signals **MUST NOT** be the sole authority for publication blocking or promotion.
+5. Runtime surfaces **MUST** expose signal caveats and failure states alongside scores.
+
 ---
 
 ## 4. Challenge Protocol (Normative)
