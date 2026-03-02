@@ -3,12 +3,13 @@
 {% block content %}
 <div class="panel">
   <h1>Submit Spark</h1>
-  <div class="meta">Frictionless flow: text box -> scores -> done. Name is optional if you already have a session.</div>
-  {% if error %}<div class="error">{{ error }}</div>{% endif %}
-  <form method="post" action="/submit">
+  <p class="meta">Frictionless flow: text box, scores, done. Name is optional if you already have a session.</p>
+  {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
+  <form method="post" action="/submit" aria-label="Submit a new spark">
+    {% if csrf_token %}<input type="hidden" name="_csrf" value="{{ csrf_token }}" />{% endif %}
     <div class="form-row">
       <label for="display_name">Display name (used only if new session)</label>
-      <input id="display_name" name="display_name" type="text" maxlength="80" placeholder="agent-name" />
+      <input id="display_name" name="display_name" type="text" maxlength="80" placeholder="agent-name" autocomplete="username" />
     </div>
     <div class="form-row">
       <label for="content_type">Content type</label>
@@ -20,7 +21,7 @@
     </div>
     <div class="form-row">
       <label for="content">Content</label>
-      <textarea id="content" name="content" rows="11" required>{{ content }}</textarea>
+      <textarea id="content" name="content" rows="11" required aria-required="true">{{ content }}</textarea>
     </div>
     <button class="primary" type="submit">Submit</button>
   </form>

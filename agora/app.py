@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -80,6 +81,39 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 _WEB_SESSIONS: Dict[str, Dict[str, Any]] = {}
 _WEB_CACHE: Dict[str, Dict[str, Any]] = {}
+_CACHE_STATS: Dict[str, int] = {"hits": 0, "misses": 0, "invalidations": 0}
+
+_log = logging.getLogger("sab.cache")
+
+# ---------------------------------------------------------------------------
+# CSRF protection helpers
+# ---------------------------------------------------------------------------
+
+import hmac as _hmac_mod  # noqa: E402
+
+
+def _csrf_token_for_session(session: Dict[str, Any]) -> str:
+    """Return (or generate) a per-session CSRF token."""
+    token = session.get("csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["csrf_token"] = token
+    return token
+
+
+def _verify_csrf_form_token(session: Optional[Dict[str, Any]], form_csrf: Optional[str]) -> None:
+    """Raise 403 if the form CSRF token is missing/mismatched.
+
+    New sessions (no cookie yet) are exempt -- there is no prior cookie to
+    hijack.
+    """
+    if session is None:
+        return
+    expected = session.get("csrf_token", "")
+    if not expected:
+        return
+    if not form_csrf or not _hmac_mod.compare_digest(form_csrf, expected):
+        raise HTTPException(status_code=403, detail="CSRF token invalid")
 
 
 def _utc_now() -> str:
@@ -162,10 +196,13 @@ def _rv_card(gate_scores: Dict[str, Any]) -> Dict[str, Any]:
 def _cache_get(key: str) -> Optional[Any]:
     entry = _WEB_CACHE.get(key)
     if not entry:
+        _CACHE_STATS["misses"] += 1
         return None
     if float(entry.get("expires_at", 0.0)) <= time.time():
         _WEB_CACHE.pop(key, None)
+        _CACHE_STATS["misses"] += 1
         return None
+    _CACHE_STATS["hits"] += 1
     return entry.get("value")
 
 
@@ -174,7 +211,20 @@ def _cache_set(key: str, value: Any) -> None:
 
 
 def _invalidate_web_cache() -> None:
+    evicted = len(_WEB_CACHE)
     _WEB_CACHE.clear()
+    _CACHE_STATS["invalidations"] += 1
+    if evicted:
+        _log.debug("web cache invalidated, evicted %d entries", evicted)
+
+
+def get_cache_stats() -> Dict[str, Any]:
+    """Return cache instrumentation snapshot (hits, misses, invalidations, size)."""
+    return {
+        **_CACHE_STATS,
+        "size": len(_WEB_CACHE),
+        "ttl_seconds": WEB_CACHE_TTL_SECONDS,
+    }
 
 
 def _cleanup_web_sessions() -> None:
@@ -221,6 +271,7 @@ def _create_web_session(conn: sqlite3.Connection, display_name: str) -> Dict[str
         "private_key_hex": private_key_hex,
         "public_key_hex": public_key_hex,
         "created_at_epoch": time.time(),
+        "csrf_token": secrets.token_urlsafe(32),
     }
     _WEB_SESSIONS[token] = session
     return session
@@ -281,7 +332,22 @@ def _db() -> sqlite3.Connection:
         conn.close()
 
 
+import re as _re_mod  # noqa: E402
+
+
+_SAFE_IDENTIFIER = _re_mod.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+
+
+def _assert_safe_identifier(name: str) -> str:
+    """Validate that *name* is a safe SQL identifier (defense-in-depth)."""
+    if not _SAFE_IDENTIFIER.fullmatch(name):
+        raise ValueError(f"Unsafe SQL identifier: {name!r}")
+    return name
+
+
 def _ensure_column(conn: sqlite3.Connection, table: str, col_name: str, col_def: str) -> None:
+    _assert_safe_identifier(table)
+    _assert_safe_identifier(col_name)
     cursor = conn.cursor()
     cursor.execute(f"PRAGMA table_info({table})")
     existing = {row[1] for row in cursor.fetchall()}
@@ -598,16 +664,17 @@ def _promote_if_quorum(conn: sqlite3.Connection, spark_id: int) -> Optional[Dict
 
 
 def _serialize_spark_row(row: sqlite3.Row) -> Dict[str, Any]:
+    raw_gate_scores = row["gate_scores"]
     return {
         "id": int(row["id"]),
-        "content": str(row["content"]),
-        "content_type": str(row["content_type"]),
-        "author_id": str(row["author_id"]),
-        "created_at": str(row["created_at"]),
-        "status": str(row["status"]),
+        "content": str(row["content"] or ""),
+        "content_type": str(row["content_type"] or "text"),
+        "author_id": str(row["author_id"] or ""),
+        "created_at": str(row["created_at"] or ""),
+        "status": str(row["status"] or "spark"),
         "rv_contraction": row["rv_contraction"],
         "composite_score": float(row["composite_score"] or 0.0),
-        "gate_scores": _load_gate_scores(str(row["gate_scores"])),
+        "gate_scores": _load_gate_scores(str(raw_gate_scores) if raw_gate_scores is not None else "{}"),
     }
 
 
@@ -1267,6 +1334,12 @@ async def node_status() -> Dict[str, Any]:
     }
 
 
+@app.get("/api/cache/stats")
+async def cache_stats() -> Dict[str, Any]:
+    """Lightweight cache instrumentation endpoint."""
+    return get_cache_stats()
+
+
 @app.get("/", response_class=HTMLResponse)
 async def web_home(
     request: Request,
@@ -1361,10 +1434,12 @@ async def web_compost(
 
 @app.get("/submit", response_class=HTMLResponse)
 async def web_submit_get(request: Request) -> HTMLResponse:
+    session = _read_web_session(request)
+    csrf = _csrf_token_for_session(session) if session else ""
     return _render_template(
         request,
         "web_submit.html",
-        {"session": _read_web_session(request), "error": "", "content": ""},
+        {"session": session, "error": "", "content": "", "csrf_token": csrf, "path_name": "/submit"},
     )
 
 
@@ -1374,13 +1449,18 @@ async def web_submit_post(
     content: str = Form(...),
     display_name: str = Form(""),
     content_type: Literal["text", "code", "link"] = Form("text"),
+    csrf_form: str = Form("", alias="_csrf"),
 ) -> HTMLResponse:
+    session = _read_web_session(request)
+    _verify_csrf_form_token(session, csrf_form)
+
     body = (content or "").strip()
     if not body:
+        csrf = _csrf_token_for_session(session) if session else ""
         return _render_template(
             request,
             "web_submit.html",
-            {"session": _read_web_session(request), "error": "Content is required.", "content": body},
+            {"session": session, "error": "Content is required.", "content": body, "csrf_token": csrf, "path_name": "/submit"},
             status_code=400,
         )
 
@@ -1397,7 +1477,17 @@ async def web_submit_post(
         author_id=str(session["agent_id"]),
         signature=signature,
     )
-    spark = await submit_spark(submit_req)
+    try:
+        spark = await submit_spark(submit_req)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        csrf = _csrf_token_for_session(session) if session else ""
+        return _render_template(
+            request,
+            "web_submit.html",
+            {"session": session, "error": detail, "content": body, "csrf_token": csrf, "path_name": "/submit"},
+            status_code=exc.status_code,
+        )
 
     response = RedirectResponse(url=f"/spark/{int(spark['id'])}?submitted=1", status_code=303)
     if request.cookies.get(WEB_SESSION_COOKIE) != session["token"]:
@@ -1455,6 +1545,8 @@ async def web_spark_detail(
                 }
             )
 
+    session = _read_web_session(request)
+    csrf = _csrf_token_for_session(session) if session else ""
     return _render_template(
         request,
         "web_spark_detail.html",
@@ -1463,7 +1555,8 @@ async def web_spark_detail(
             "challenges": challenges,
             "timeline": timeline,
             "submitted": bool(submitted),
-            "session": _read_web_session(request),
+            "session": session,
+            "csrf_token": csrf,
         },
     )
 
@@ -1474,7 +1567,10 @@ async def web_challenge_post(
     spark_id: int,
     content: str = Form(...),
     display_name: str = Form(""),
+    csrf_form: str = Form("", alias="_csrf"),
 ) -> HTMLResponse:
+    _verify_csrf_form_token(_read_web_session(request), csrf_form)
+
     body = (content or "").strip()
     if not body:
         return RedirectResponse(url=f"/spark/{spark_id}?challenge_error=1", status_code=303)
@@ -1493,7 +1589,10 @@ async def web_challenge_post(
         content=body,
         signature=signature,
     )
-    await challenge_spark(spark_id, challenge_req)
+    try:
+        await challenge_spark(spark_id, challenge_req)
+    except HTTPException:
+        return RedirectResponse(url=f"/spark/{spark_id}?challenge_error=1", status_code=303)
 
     response = RedirectResponse(url=f"/spark/{spark_id}#challenges", status_code=303)
     if request.cookies.get(WEB_SESSION_COOKIE) != session["token"]:
@@ -1508,7 +1607,9 @@ async def web_witness_post(
     action: Literal["affirm", "canon_affirm", "compost"] = Form("affirm"),
     note: str = Form(""),
     display_name: str = Form(""),
+    csrf_form: str = Form("", alias="_csrf"),
 ) -> HTMLResponse:
+    _verify_csrf_form_token(_read_web_session(request), csrf_form)
     init_db()
     with _db() as conn:
         session = _resolve_or_create_web_session(request, conn, display_name)
@@ -1529,7 +1630,10 @@ async def web_witness_post(
         payload=payload,
         signature=signature,
     )
-    await witness_sign(witness_req)
+    try:
+        await witness_sign(witness_req)
+    except HTTPException:
+        return RedirectResponse(url=f"/spark/{spark_id}?witness_error=1", status_code=303)
 
     response = RedirectResponse(url=f"/spark/{spark_id}#timeline", status_code=303)
     if request.cookies.get(WEB_SESSION_COOKIE) != session["token"]:
@@ -1542,7 +1646,7 @@ async def web_register_get(request: Request) -> HTMLResponse:
     return _render_template(
         request,
         "web_register.html",
-        {"session": _read_web_session(request), "error": ""},
+        {"session": _read_web_session(request), "error": "", "path_name": "/register"},
     )
 
 
@@ -1666,5 +1770,5 @@ async def web_about(request: Request) -> HTMLResponse:
     return _render_template(
         request,
         "web_about.html",
-        {"session": _read_web_session(request), "dimensions_count": len(SAB_17_DIMENSIONS)},
+        {"session": _read_web_session(request), "dimensions_count": len(SAB_17_DIMENSIONS), "path_name": "/about"},
     )

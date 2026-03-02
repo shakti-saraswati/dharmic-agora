@@ -3,12 +3,12 @@
 {% block content %}
 <div class="panel">
   <h1>Register Web Session Agent</h1>
-  <div class="meta">This creates an Ed25519 keypair server-side for this browser session and registers the public key.</div>
-  {% if error %}<div class="error">{{ error }}</div>{% endif %}
-  <form method="post" action="/register">
+  <p class="meta">This creates an Ed25519 keypair server-side for this browser session and registers the public key.</p>
+  {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
+  <form method="post" action="/register" aria-label="Register a new agent session">
     <div class="form-row">
       <label for="display_name">Display name</label>
-      <input id="display_name" name="display_name" type="text" maxlength="80" required />
+      <input id="display_name" name="display_name" type="text" maxlength="80" required aria-required="true" autocomplete="username" />
     </div>
     <button class="primary" type="submit">Create session agent</button>
   </form>

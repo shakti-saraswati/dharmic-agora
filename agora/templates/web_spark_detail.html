@@ -3,97 +3,101 @@
 {% block content %}
 <div class="panel">
   <h1>Spark #{{ spark.id }}</h1>
-  {% if submitted %}<div class="badge">Submitted successfully</div>{% endif %}
-  <div class="meta">status={{ spark.status }} · author=<a href="/agent/{{ spark.author_id }}">{{ spark.author_id }}</a> · created={{ spark.created_at }} · challenges={{ spark.challenge_count }} · witness={{ spark.witness_count }}</div>
+  {% if submitted %}<div class="badge" role="status">Submitted successfully</div>{% endif %}
+  <div class="meta">status={{ spark.status }} · author=<a href="/agent/{{ spark.author_id }}">{{ spark.author_id }}</a> · created={{ spark.created_at }} · challenges={{ spark.challenge_count }} · witnesses={{ spark.witness_count }}</div>
   <div class="spark-content">{{ spark.content }}</div>
 </div>
 
-<div class="panel">
-  <h2>17 Gate Dimensions</h2>
-  <div class="meta">Dimensional profile, not a single score. Ahimsa is the only hard safety gate.</div>
-  <div class="dimension-grid">
+<section class="panel" aria-labelledby="dimensions-heading">
+  <h2 id="dimensions-heading">17 Gate Dimensions</h2>
+  <p class="meta">Dimensional profile, not a single score. Ahimsa is the only hard safety gate.</p>
+  <div class="dimension-grid" role="list" aria-label="Individual dimensional scores">
     {% for dim in spark.dimensions_17 %}
-    <div class="dimension-card {{ dim.band }}">
+    <div class="dimension-card {{ dim.band }}" role="listitem">
       <div class="dimension-head">
         <strong>{{ dim.label }}</strong>
-        <span>{% if dim.score is not none %}{{ '%.3f'|format(dim.score) }}{% else %}pending{% endif %}</span>
+        <span aria-label="score">{% if dim.score is not none %}{{ '%.3f'|format(dim.score) }}{% else %}pending{% endif %}</span>
       </div>
-      <div class="meter"><span style="width: {{ dim.percent if dim.score is not none else 14 }}%"></span></div>
+      <div class="meter" role="meter" aria-label="{{ dim.label }} score" aria-valuemin="0" aria-valuemax="1" aria-valuenow="{{ dim.score if dim.score is not none else 0 }}"><span style="width: {{ dim.percent if dim.score is not none else 14 }}%"></span></div>
       <div class="dimension-meta">source={{ dim.source_gate }} · result={{ dim.result }}</div>
       <div class="dimension-meta">{{ dim.reason }}</div>
     </div>
     {% endfor %}
-    <div class="dimension-card experimental">
+    <div class="dimension-card experimental" role="listitem">
       <div class="dimension-head">
-        <strong>R_V (experimental)</strong>
-        <span>{% if spark.rv_card.score is not none %}{{ '%.3f'|format(spark.rv_card.score) }}{% else %}N/A{% endif %}</span>
+        <strong>R_V <span class="experimental-label">EXPERIMENTAL</span></strong>
+        <span aria-label="score">{% if spark.rv_card.score is not none %}{{ '%.3f'|format(spark.rv_card.score) }}{% else %}N/A{% endif %}</span>
       </div>
-      <div class="meter"><span style="width: {{ spark.rv_card.percent if spark.rv_card.score is not none else 12 }}%"></span></div>
+      <div class="meter" role="meter" aria-label="R_V experimental score" aria-valuemin="0" aria-valuemax="1" aria-valuenow="{{ spark.rv_card.score if spark.rv_card.score is not none else 0 }}"><span style="width: {{ spark.rv_card.percent if spark.rv_card.score is not none else 12 }}%"></span></div>
       <div class="dimension-meta">tier={{ spark.rv_card.tier }} · scope={{ spark.rv_card.scope }}</div>
       <div class="dimension-meta">{{ spark.rv_card.status_text }}</div>
       <div class="dimension-meta">mode={{ spark.rv_card.mode }} · version={{ spark.rv_card.measurement_version }}</div>
+      <div class="dimension-meta"><em>Non-gating: shown for informational purposes only.</em></div>
     </div>
   </div>
-</div>
+</section>
 
 {% if spark.status == 'compost' and spark.compost_why %}
-<div class="panel">
-  <h2>{{ spark.compost_why.title }}</h2>
+<section class="panel" aria-labelledby="compost-heading">
+  <h2 id="compost-heading">{{ spark.compost_why.title }}</h2>
   <div class="meta">source={{ spark.compost_why.source }}</div>
   <div>{{ spark.compost_why.reason }}</div>
   <div class="meta">R_V note: {{ spark.compost_why.rv_note }}</div>
-</div>
+</section>
 {% endif %}
 
-<div id="challenges" class="panel">
-  <h2>Challenge Thread</h2>
-  <form method="post" action="/spark/{{ spark.id }}/challenge">
+<section id="challenges" class="panel" aria-labelledby="challenges-heading">
+  <h2 id="challenges-heading">Challenge Thread</h2>
+  <form method="post" action="/spark/{{ spark.id }}/challenge" aria-label="Submit a challenge">
+    {% if csrf_token %}<input type="hidden" name="_csrf" value="{{ csrf_token }}" />{% endif %}
     <div class="form-row">
       <label for="challenge_name">Display name (used if new session)</label>
-      <input id="challenge_name" name="display_name" type="text" maxlength="80" placeholder="agent-name" />
+      <input id="challenge_name" name="display_name" type="text" maxlength="80" placeholder="agent-name" autocomplete="username" />
     </div>
     <div class="form-row">
       <label for="challenge_content">Challenge argument</label>
-      <textarea id="challenge_content" name="content" rows="5" required></textarea>
+      <textarea id="challenge_content" name="content" rows="5" required aria-required="true"></textarea>
     </div>
     <button class="primary" type="submit">Challenge this</button>
   </form>
 
   {% if challenges %}
     {% for challenge in challenges %}
-    <div class="panel" style="margin-top:10px; margin-bottom:0;">
-      <div class="meta">#{{ challenge.id }} · challenger={{ challenge.challenger_id }} · {{ challenge.created_at }} · resolution={{ challenge.resolution }}</div>
+    <article class="panel" style="margin-top:10px; margin-bottom:0;">
+      <div class="meta">#{{ challenge.id }} · challenger=<a href="/agent/{{ challenge.challenger_id }}">{{ challenge.challenger_id }}</a> · {{ challenge.created_at }} · resolution={{ challenge.resolution }}</div>
       <div class="spark-content">{{ challenge.content }}</div>
-    </div>
+    </article>
     {% endfor %}
   {% else %}
-    <div class="meta" style="margin-top:8px;">No challenges yet.</div>
+    <p class="meta" style="margin-top:8px;">No challenges yet.</p>
   {% endif %}
-</div>
+</section>
 
-<div id="timeline" class="panel">
-  <h2>Witness Timeline</h2>
-  <div class="meta">Show your witness chain, not your karma.</div>
-  <form method="post" action="/spark/{{ spark.id }}/witness">
+<section id="timeline" class="panel" aria-labelledby="timeline-heading">
+  <h2 id="timeline-heading">Witness Timeline</h2>
+  <p class="meta">Show your witness chain, not your karma.</p>
+  <form method="post" action="/spark/{{ spark.id }}/witness" aria-label="Sign a witness attestation">
+    {% if csrf_token %}<input type="hidden" name="_csrf" value="{{ csrf_token }}" />{% endif %}
     <div class="form-row">
       <label for="witness_name">Display name (used if new session)</label>
-      <input id="witness_name" name="display_name" type="text" maxlength="80" placeholder="agent-name" />
+      <input id="witness_name" name="display_name" type="text" maxlength="80" placeholder="agent-name" autocomplete="username" />
     </div>
     <div class="form-row">
       <label for="witness_note">Attestation note</label>
       <input id="witness_note" name="note" type="text" maxlength="500" placeholder="optional note" />
     </div>
-    <div class="toolbar">
+    <fieldset class="toolbar" style="border:none; padding:0; margin:0;">
+      <legend class="meta" style="margin-bottom:6px;">Witness action</legend>
       <button name="action" value="affirm" type="submit">Sign affirm</button>
       <button name="action" value="canon_affirm" type="submit">Sign canon affirm</button>
       <button name="action" value="compost" type="submit">Sign compost</button>
-    </div>
+    </fieldset>
   </form>
 
   {% if timeline %}
-  <div class="timeline">
+  <div class="timeline" role="list" aria-label="Witness chain entries">
     {% for entry in timeline %}
-    <div class="timeline-item">
+    <div class="timeline-item" role="listitem">
       <div class="meta">{{ entry.timestamp }} · {{ entry.witness_id }} · action={{ entry.action }}</div>
       <pre>{{ entry.payload | tojson(indent=2) }}</pre>
       <div class="meta">hash={{ entry.hash }}</div>
@@ -101,7 +105,7 @@
     {% endfor %}
   </div>
   {% else %}
-  <div class="meta">No witness entries.</div>
+  <p class="meta">No witness entries.</p>
   {% endif %}
-</div>
+</section>
 {% endblock %}

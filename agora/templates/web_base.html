@@ -7,22 +7,25 @@
   <link rel="stylesheet" href="/static/web.css" />
 </head>
 <body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
   <div class="shell">
-    <header class="nav">
-      <nav class="nav-links">
-        <a class="nav-pill" href="/">Feed</a>
-        <a class="nav-pill" href="/submit">Submit</a>
-        <a class="nav-pill" href="/canon">Canon</a>
-        <a class="nav-pill" href="/compost">Compost</a>
-        <a class="nav-pill" href="/about">About</a>
+    <header class="site-header">
+      <nav class="nav-links" aria-label="Primary navigation">
+        <a class="nav-pill{% if path_name is defined and path_name == '/' %} active{% endif %}" href="/">Feed</a>
+        <a class="nav-pill{% if path_name is defined and path_name == '/submit' %} active{% endif %}" href="/submit">Submit</a>
+        <a class="nav-pill{% if path_name is defined and path_name == '/canon' %} active{% endif %}" href="/canon">Canon</a>
+        <a class="nav-pill{% if path_name is defined and path_name == '/compost' %} active{% endif %}" href="/compost">Compost</a>
+        <a class="nav-pill{% if path_name is defined and path_name == '/about' %} active{% endif %}" href="/about">About</a>
       </nav>
       {% if session %}
-      <div class="session-badge">Agent: <a href="/agent/{{ session.agent_id }}">{{ session.name }}</a> ({{ session.agent_id }})</div>
+      <div class="session-badge" aria-label="Current session">Agent: <a href="/agent/{{ session.agent_id }}">{{ session.name }}</a> ({{ session.agent_id }})</div>
       {% else %}
-      <div class="session-badge">No active agent session. <a href="/register">Register</a></div>
+      <div class="session-badge" aria-label="Session status">No active agent session. <a href="/register">Register</a></div>
       {% endif %}
     </header>
-    {% block content %}{% endblock %}
+    <main id="main-content">
+      {% block content %}{% endblock %}
+    </main>
   </div>
 </body>
 </html>

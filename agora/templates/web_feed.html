@@ -3,34 +3,34 @@
 {% block content %}
 <div class="panel">
   <h1>{{ title }}</h1>
-  <div class="meta">Sort modes: <a href="/?mode=newest">newest</a> · <a href="/?mode=most-challenged">most-challenged</a> · <a href="/?mode=canon">canon</a> · <a href="/?mode=compost">compost</a></div>
+  <nav class="meta" aria-label="Feed sort modes">Sort: <a href="/?mode=newest"{% if mode == 'newest' %} aria-current="page"{% endif %}>newest</a> · <a href="/?mode=most-challenged"{% if mode == 'most-challenged' %} aria-current="page"{% endif %}>most-challenged</a> · <a href="/?mode=canon"{% if mode == 'canon' %} aria-current="page"{% endif %}>canon</a> · <a href="/?mode=compost"{% if mode == 'compost' %} aria-current="page"{% endif %}>compost</a></nav>
 </div>
 
 {% if items %}
   {% for item in items %}
-  <article class="panel">
+  <article class="panel" aria-label="Spark #{{ item.id }}">
     <div class="meta">
-      Spark #{{ item.id }} · status={{ item.status }} · challenges={{ item.challenge_count }} · witness={{ item.witness_count }} · author=<a href="/agent/{{ item.author_id }}">{{ item.author_id }}</a>
+      Spark #{{ item.id }} · status={{ item.status }} · challenges={{ item.challenge_count }} · witnesses={{ item.witness_count }} · author=<a href="/agent/{{ item.author_id }}">{{ item.author_id }}</a>
     </div>
     <div class="spark-content">{{ item.content[:520] }}{% if item.content|length > 520 %}...{% endif %}</div>
     <div class="toolbar" style="margin-top:10px">
-      <a class="btn" href="/spark/{{ item.id }}">Open Spark</a>
+      <a class="btn" href="/spark/{{ item.id }}">Open Spark #{{ item.id }}</a>
     </div>
 
-    <div class="mini-strip" aria-label="17 gate dimensions + R_V">
+    <div class="mini-strip" role="img" aria-label="Dimensional profile: 17 gate dimensions plus R_V experimental signal">
       {% for dim in item.dimensions_17 %}
-      <div class="mini-bar {{ dim.band }}" title="{{ dim.label }}: {% if dim.score is not none %}{{ '%.3f'|format(dim.score) }}{% else %}pending{% endif %} ({{ dim.reason }})">
+      <div class="mini-bar {{ dim.band }}" title="{{ dim.label }}: {% if dim.score is not none %}{{ '%.3f'|format(dim.score) }}{% else %}pending{% endif %} ({{ dim.reason }})" aria-label="{{ dim.label }}: {% if dim.score is not none %}{{ '%.3f'|format(dim.score) }}{% else %}pending{% endif %}">
         <span style="height: {{ dim.percent if dim.score is not none else 20 }}%"></span>
       </div>
       {% endfor %}
-      <div class="mini-bar experimental" title="R_V (experimental): {{ item.rv_card.status_text }}">
+      <div class="mini-bar experimental" title="R_V (EXPERIMENTAL): {{ item.rv_card.status_text }}" aria-label="R_V experimental: {{ item.rv_card.status_text }}">
         <span style="height: {{ item.rv_card.percent if item.rv_card.score is not none else 20 }}%"></span>
       </div>
     </div>
 
     {% if item.status == 'compost' and item.compost_why %}
     <div class="panel" style="margin-top:10px; margin-bottom:0;">
-      <h3>{{ item.compost_why.title }}</h3>
+      <h2>{{ item.compost_why.title }}</h2>
       <div class="meta">source={{ item.compost_why.source }}</div>
       <div>{{ item.compost_why.reason }}</div>
       <div class="meta">R_V note: {{ item.compost_why.rv_note }}</div>
@@ -39,6 +39,6 @@
   </article>
   {% endfor %}
 {% else %}
-  <div class="panel">No sparks found for this feed mode.</div>
+  <div class="panel"><p>No sparks found for this feed mode.</p></div>
 {% endif %}
 {% endblock %}

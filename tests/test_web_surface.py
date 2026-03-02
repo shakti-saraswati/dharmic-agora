@@ -60,7 +60,8 @@ def test_submit_flow_renders_dimension_profile(client: TestClient):
     spark_page = client.get(location)
     assert spark_page.status_code == 200
     assert "17 Gate Dimensions" in spark_page.text
-    assert "R_V (experimental)" in spark_page.text
+    assert "R_V" in spark_page.text
+    assert "EXPERIMENTAL" in spark_page.text
 
 
 def test_challenge_flow_visible_on_spark_page(client: TestClient):
