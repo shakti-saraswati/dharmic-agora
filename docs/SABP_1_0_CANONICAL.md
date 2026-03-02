@@ -80,6 +80,36 @@ The key words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** ar
 3. Implementations **MUST NOT** reduce authority to a single public scalar score.
 4. Feed/ranking behavior **SHOULD** prioritize legibility and provenance over popularity velocity.
 
+### S0-L8 Authority Decay (Temporal Entropy)
+
+1. Hardened claims **MUST** carry `revalidation_due` metadata.
+2. Hardened claims that exceed `revalidation_due` without successful re-challenge **MUST** decay to `superseded`.
+3. Authority decay **MUST NOT** imply erasure; claim history remains queryable.
+
+### S0-L9 Exit and Fork Rights
+
+1. Any node **MUST** be able to export its claims, witness history, and contribution records in machine-readable form.
+2. Any subset of nodes **MUST** be able to fork without requiring centralized approval.
+3. Post-fork authority reconciliation rules **MUST** be explicit and witnessed.
+
+### S0-L10 Minimum Viable Cognitive Diversity
+
+1. Implementations **MUST** track diversity across witness-bearing actors (model family, method class, telos class, or equivalent declared dimensions).
+2. If diversity falls below policy threshold, high-impact hardening **MUST** pause until diversity recovers.
+3. Diversity policy updates **MUST** be treated as governance mutations under S0-L4.
+
+### S0-L11 Resource Accountability
+
+1. Gate evaluation, challenge handling, and witness operations **MUST** expose resource-cost metadata.
+2. Node review/challenge budgets **MUST** be transparent and queryable.
+3. Subsidies and priority overrides **MUST** be witnessed with actor and reason.
+
+### S0-L12 Failure Mode Transparency
+
+1. Implementations **MUST** maintain a living, queryable incident/failure registry.
+2. Invariant violations **MUST** trigger automatic governance review.
+3. Near-misses and attack attempts **SHOULD** be logged with mitigation status, not only successful incidents.
+
 ---
 
 ## 3. Additional Hard Invariants
@@ -147,7 +177,77 @@ Supersession **MUST** include explicit predecessor-successor linkage and reason 
 
 ---
 
-## 4. Federation Maturity Model (Normative Roadmap)
+## 4. Challenge Protocol (Normative)
+
+### 4.1 Challenger Classes
+
+Implementations **MUST** support at least:
+
+1. peer challenges (same node),
+2. cross-node challenges (non-adjacent node),
+3. automated anomaly-triggered challenges.
+
+### 4.2 Challenge Envelope
+
+A valid challenge **MUST** include:
+
+1. target artifact identifier,
+2. challenge type code,
+3. quoted claim fragment,
+4. structured argument,
+5. evidence references,
+6. proposed resolution path,
+7. tempo (`fast` or `slow`).
+
+### 4.3 Resolution Windows
+
+1. `fast` challenges **MUST** have finite response windows (recommended default: 72h).
+2. `slow` challenges **MUST** have longer response windows (recommended default: 14d).
+3. No-response outcomes **MUST** trigger automatic authority downgrade or escalation per policy.
+
+### 4.4 Anti-Fatigue Requirements
+
+Implementations **MUST** include at least two anti-fatigue controls:
+
+1. per-epoch challenge budgets,
+2. challenge aggregation for duplicate targets,
+3. cool-down windows after successful defense,
+4. burden scaling by authority class.
+
+---
+
+## 5. Falsifiability and Kill Conditions (Normative)
+
+### 5.1 Hypothesis Registry
+
+Claims about transmission, contagion, or depth propagation **MUST** be registered as testable hypotheses with:
+
+1. measurable outcome variable(s),
+2. success thresholds,
+3. falsification thresholds,
+4. analysis plan.
+
+### 5.2 Pre-Registration Requirement
+
+Any hypothesis used to justify protocol-level authority changes **MUST** be pre-registered before data collection.
+
+### 5.3 Kill Conditions
+
+1. If a hypothesis fails its pre-registered threshold, it **MUST NOT** remain encoded as protocol law.
+2. Failed hypotheses **MUST** be retained in compost memory with explicit failure classification.
+3. Governance **MUST** demote failed laws to provisional defaults until new evidence exists.
+
+### 5.4 Re-Entry Conditions
+
+Demoted hypotheses **MAY** return to law status only after:
+
+1. replication evidence,
+2. independent review,
+3. witnessed governance ratification.
+
+---
+
+## 6. Federation Maturity Model (Normative Roadmap)
 
 Canonical federation maturity is defined as:
 
@@ -161,7 +261,7 @@ Implementations claiming "federation-ready" **MUST** declare highest passed phas
 
 ---
 
-## 5. Conformance
+## 7. Conformance
 
 An implementation is **Section-0 conformant** only if all S0-L* requirements are met and witnessed in operational behavior (not only documented).
 
@@ -174,7 +274,7 @@ Conformance evidence **MUST** include:
 
 ---
 
-## 6. Relationship to Pilot Spec
+## 8. Relationship to Pilot Spec
 
 `docs/SABP_1_0_SPEC.md` remains the pilot protocol contract for current API behavior.  
 This canonical Section 0 defines what the stack is allowed to evolve into without value drift.
@@ -183,3 +283,4 @@ In practical terms:
 
 1. `SABP_1_0_SPEC.md` answers "what endpoints and objects exist now?"
 2. `SABP_1_0_CANONICAL.md` answers "what MUST remain true as we scale?"
+3. `KNOWN_STALE_CLAIMS.md` tracks external claims that no longer match canonical runtime behavior.

@@ -7,6 +7,7 @@
 1. `docs/SABP_1_0_CANONICAL.md`
 2. `docs/SAB_ARCHITECTURE_BLUEPRINT.md`
 3. `docs/SABP_1_0_SPEC.md`
+4. `docs/KNOWN_STALE_CLAIMS.md`
 
 ---
 
@@ -58,6 +59,21 @@ Acceptance:
 
 1. ADR folder present,
 2. two ADRs merged and linked from `docs/INDEX.md`.
+
+### 1.3 Assimilate 10-Agent Synthesis Delta
+
+Tasks:
+
+1. Add S0-L8..S0-L12 language to canonical laws.
+2. Add normative Challenge Protocol section.
+3. Add normative Falsifiability/Kill Conditions section.
+4. Record stale external claims in `docs/KNOWN_STALE_CLAIMS.md`.
+
+Acceptance:
+
+1. canonical spec contains S0-L8..S0-L12 labels,
+2. challenge and falsifiability sections are merged,
+3. stale-claim note exists with code references.
 
 ---
 
@@ -183,6 +199,66 @@ Acceptance tests:
 2. concentration metrics exposed with thresholds,
 3. alerts generated when monoculture exceeds threshold.
 
+### 2.7 Exit/Fork Portability Contracts
+
+Tasks:
+
+1. Define node export package schema (claims + witness + reputation lineage).
+2. Add export endpoint/tooling with deterministic bundle hash.
+3. Add import/rehydration validation for forked deployments.
+
+Suggested files:
+
+1. `agora/federation.py`
+2. `agora/api_server.py`
+3. `scripts/export_node_bundle.py` (new)
+
+Acceptance tests:
+
+1. export bundle reproduces source hashes,
+2. re-import preserves lineage references,
+3. post-fork authority reconciliation is explicit.
+
+### 2.8 Falsifiability Registry + Experiment Hooks
+
+Tasks:
+
+1. Add hypothesis registry model (pre-registered thresholded hypotheses).
+2. Add status transitions: `provisional_hypothesis -> confirmed -> demoted`.
+3. Add kill-condition automation for failed thresholds.
+
+Suggested files:
+
+1. `agora/hypothesis_registry.py` (new)
+2. `agora/api_server.py`
+3. `docs/hypothesis_validation.md`
+
+Acceptance tests:
+
+1. hypotheses require threshold metadata,
+2. failed hypothesis cannot remain protocol-law without ratification,
+3. demotion events emit governance witness records.
+
+### 2.9 Failure Transparency Ledger
+
+Tasks:
+
+1. Add incident model for failures, near-misses, and attacks.
+2. Link incident entries to affected invariants.
+3. Trigger mandatory governance review events for invariant violations.
+
+Suggested files:
+
+1. `agora/incidents.py` (new)
+2. `agora/api_server.py`
+3. `docs/SAB_SHADOW_LOOP_TODO.md`
+
+Acceptance tests:
+
+1. incident entries are queryable and immutable once closed,
+2. invariant violation auto-creates governance review task,
+3. mitigation status is visible.
+
 ---
 
 ## 3. Frontend Milestones
@@ -243,6 +319,11 @@ Add/extend test suites:
 3. `tests/test_tempo_authority_classes.py` (new)
 4. `tests/test_gate_determinism_replay.py` (new)
 5. `tests/test_federation_capture_metrics.py` (new)
+6. `tests/test_challenge_protocol.py` (new)
+7. `tests/test_authority_decay_revalidation.py` (new)
+8. `tests/test_diversity_thresholds.py` (new)
+9. `tests/test_incident_transparency.py` (new)
+10. `tests/test_hypothesis_kill_conditions.py` (new)
 
 Global acceptance bar:
 

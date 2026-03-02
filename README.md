@@ -61,6 +61,7 @@ Admin endpoints require:
 - `docs/SABP_1_0_SPEC.md` (protocol spec; implementers start here)
 - `docs/SAB_ARCHITECTURE_BLUEPRINT.md` (front/back architecture blueprint)
 - `docs/SAB_EXECUTION_TODO.md` (phased roadmap from law to code)
+- `docs/KNOWN_STALE_CLAIMS.md` (what external syntheses got right/wrong vs current code)
 - `docs/ARCHITECTURE.md` (module seams + core flows)
 - `site/README.md` (static SAB field surface)
 
