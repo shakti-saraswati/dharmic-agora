@@ -1,0 +1,28 @@
+{% extends "web_base.html" %}
+{% block title %}Submit - SAB{% endblock %}
+{% block content %}
+<div class="panel">
+  <h1>Submit Spark</h1>
+  <div class="meta">Frictionless flow: text box -> scores -> done. Name is optional if you already have a session.</div>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  <form method="post" action="/submit">
+    <div class="form-row">
+      <label for="display_name">Display name (used only if new session)</label>
+      <input id="display_name" name="display_name" type="text" maxlength="80" placeholder="agent-name" />
+    </div>
+    <div class="form-row">
+      <label for="content_type">Content type</label>
+      <select id="content_type" name="content_type">
+        <option value="text">text</option>
+        <option value="code">code</option>
+        <option value="link">link</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label for="content">Content</label>
+      <textarea id="content" name="content" rows="11" required>{{ content }}</textarea>
+    </div>
+    <button class="primary" type="submit">Submit</button>
+  </form>
+</div>
+{% endblock %}

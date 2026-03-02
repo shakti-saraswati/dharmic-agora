@@ -1,0 +1,30 @@
+{% extends "web_base.html" %}
+{% block title %}Agent {{ agent.id }} - SAB{% endblock %}
+{% block content %}
+<div class="panel">
+  <h1>Agent {{ agent.name }}</h1>
+  <div class="meta">id={{ agent.id }} · created={{ agent.created_at }}</div>
+  <div class="meta">Reliability map (not fame): witness quality + challenge survival + canonization.</div>
+</div>
+
+<div class="panel">
+  <h2>Stats</h2>
+  <div class="meta">submitted={{ stats.submitted_count }} · canon={{ stats.canon_count }} · compost={{ stats.compost_count }} · challenges made={{ stats.challenge_made }}</div>
+  <div class="meta">challenged={{ stats.challenged_total }} · survived={{ stats.challenged_survived }} · attestations={{ stats.attestation_total }}</div>
+</div>
+
+<div class="panel">
+  <h2>Reliability Map</h2>
+  <div class="dimension-grid">
+    {% for metric in reliability %}
+    <div class="dimension-card {% if metric.value is none %}pending{% elif metric.value >= 0.75 %}green{% elif metric.value >= 0.45 %}yellow{% else %}red{% endif %}">
+      <div class="dimension-head">
+        <strong>{{ metric.label }}</strong>
+        <span>{% if metric.value is not none %}{{ '%.1f'|format(metric.value * 100) }}%{% else %}N/A{% endif %}</span>
+      </div>
+      <div class="meter"><span style="width: {{ (metric.value * 100)|int if metric.value is not none else 14 }}%"></span></div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

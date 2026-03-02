@@ -11,13 +11,18 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import sqlite3
+import time
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import FastAPI, HTTPException, Query, status
+from fastapi import FastAPI, Form, HTTPException, Query, Request, status
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
 
 from .config import SAB_VERSION, get_db_path
@@ -41,6 +46,40 @@ SYSTEM_KEY_PATH = Path(
     )
 )
 CANON_QUORUM = int(os.getenv("SAB_CANON_QUORUM", "3"))
+APP_DIR = Path(__file__).resolve().parent
+TEMPLATES_DIR = APP_DIR / "templates"
+STATIC_DIR = APP_DIR / "static"
+WEB_SESSION_COOKIE = "sab_web_session"
+WEB_SESSION_MAX_AGE_SECONDS = int(os.getenv("SAB_WEB_SESSION_MAX_AGE_SECONDS", str(7 * 24 * 3600)))
+WEB_CACHE_TTL_SECONDS = int(os.getenv("SAB_WEB_CACHE_TTL_SECONDS", "15"))
+
+# Canonical 17-dimension profile used for UI visualization.
+SAB_17_DIMENSIONS: List[Dict[str, str]] = [
+    {"id": "SATYA", "label": "Satya", "source_gate": "satya"},
+    {"id": "AHIMSA", "label": "Ahimsa", "source_gate": "ahimsa"},
+    {"id": "ASTEYA", "label": "Asteya", "source_gate": "originality"},
+    {"id": "BRAHMACHARYA", "label": "Brahmacharya", "source_gate": "relevance"},
+    {"id": "APARIGRAHA", "label": "Aparigraha", "source_gate": ""},
+    {"id": "SHAUCHA", "label": "Shaucha", "source_gate": "substance"},
+    {"id": "SANTOSHA", "label": "Santosha", "source_gate": ""},
+    {"id": "TAPAS", "label": "Tapas", "source_gate": "rate_limit"},
+    {"id": "SVADHYAYA", "label": "Svadhyaya", "source_gate": "svadhyaya"},
+    {"id": "ISHVARA", "label": "Ishvara", "source_gate": "isvara"},
+    {"id": "WITNESS", "label": "Witness", "source_gate": "witness"},
+    {"id": "CONSENT", "label": "Consent", "source_gate": ""},
+    {"id": "NONVIOLENCE", "label": "Nonviolence", "source_gate": "ahimsa"},
+    {"id": "TRANSPARENCY", "label": "Transparency", "source_gate": ""},
+    {"id": "RECIPROCITY", "label": "Reciprocity", "source_gate": ""},
+    {"id": "HUMILITY", "label": "Humility", "source_gate": ""},
+    {"id": "INTEGRITY", "label": "Integrity", "source_gate": "telos_alignment"},
+]
+
+STATIC_DIR.mkdir(parents=True, exist_ok=True)
+TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+_WEB_SESSIONS: Dict[str, Dict[str, Any]] = {}
+_WEB_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 def _utc_now() -> str:
@@ -58,6 +97,154 @@ def _canonical_bytes(payload: Dict[str, Any]) -> bytes:
 
 def _sha256_hex(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def _band_for_score(score: Optional[float]) -> str:
+    if score is None:
+        return "pending"
+    if score >= 0.75:
+        return "green"
+    if score >= 0.45:
+        return "yellow"
+    return "red"
+
+
+def _dimension_profile(gate_scores: Dict[str, Any]) -> List[Dict[str, Any]]:
+    dimensions = gate_scores.get("dimensions", {})
+    profile: List[Dict[str, Any]] = []
+    for dim in SAB_17_DIMENSIONS:
+        gate_key = dim.get("source_gate", "")
+        gate_data = dimensions.get(gate_key, {}) if gate_key else {}
+        score = gate_data.get("score")
+        score_val = float(score) if isinstance(score, (int, float)) else None
+        profile.append(
+            {
+                "id": dim["id"],
+                "label": dim["label"],
+                "score": score_val,
+                "percent": int(round((score_val or 0.0) * 100)),
+                "band": _band_for_score(score_val),
+                "result": str(gate_data.get("result", "pending")),
+                "reason": str(
+                    gate_data.get("reason")
+                    or ("Pending instrumentation in sprint runtime." if not gate_data else "Scored")
+                ),
+                "source_gate": gate_key or "pending",
+                "is_measured": bool(gate_data),
+            }
+        )
+    return profile
+
+
+def _rv_card(gate_scores: Dict[str, Any]) -> Dict[str, Any]:
+    rv_signal = gate_scores.get("rv_signal", {})
+    rv_val_raw = rv_signal.get("rv")
+    rv_val = float(rv_val_raw) if isinstance(rv_val_raw, (int, float)) else None
+    warnings = [str(w) for w in rv_signal.get("warnings", []) if isinstance(w, str)]
+    status_text = "measured"
+    if rv_val is None:
+        status_text = "not measured (requires GPU sidecar)"
+    if "measurement_failed_status" in warnings or "measurement_failed_http" in warnings:
+        status_text = "measurement unavailable (sidecar error)"
+    return {
+        "label": "R_V",
+        "score": rv_val,
+        "percent": int(round((rv_val or 0.0) * 100)),
+        "mode": str(rv_signal.get("mode", "uncertain")),
+        "tier": str(rv_signal.get("signal_label", "experimental")),
+        "scope": str(rv_signal.get("claim_scope", "icl_adaptation_only")),
+        "status_text": status_text,
+        "measurement_version": str(rv_signal.get("measurement_version", "unknown")),
+        "warnings": warnings,
+    }
+
+
+def _cache_get(key: str) -> Optional[Any]:
+    entry = _WEB_CACHE.get(key)
+    if not entry:
+        return None
+    if float(entry.get("expires_at", 0.0)) <= time.time():
+        _WEB_CACHE.pop(key, None)
+        return None
+    return entry.get("value")
+
+
+def _cache_set(key: str, value: Any) -> None:
+    _WEB_CACHE[key] = {"value": value, "expires_at": time.time() + WEB_CACHE_TTL_SECONDS}
+
+
+def _invalidate_web_cache() -> None:
+    _WEB_CACHE.clear()
+
+
+def _cleanup_web_sessions() -> None:
+    now = time.time()
+    expired = [
+        token
+        for token, session in _WEB_SESSIONS.items()
+        if float(session.get("created_at_epoch", 0.0)) + WEB_SESSION_MAX_AGE_SECONDS < now
+    ]
+    for token in expired:
+        _WEB_SESSIONS.pop(token, None)
+
+
+def _read_web_session(request: Request) -> Optional[Dict[str, Any]]:
+    _cleanup_web_sessions()
+    token = request.cookies.get(WEB_SESSION_COOKIE)
+    if not token:
+        return None
+    return _WEB_SESSIONS.get(token)
+
+
+def _signing_key_from_session(session: Dict[str, Any]) -> SigningKey:
+    return SigningKey(str(session["private_key_hex"]).encode(), encoder=HexEncoder)
+
+
+def _create_web_session(conn: sqlite3.Connection, display_name: str) -> Dict[str, Any]:
+    clean_name = (display_name or "").strip()[:80] or "anonymous"
+    signing_key = SigningKey.generate()
+    private_key_hex = signing_key.encode(encoder=HexEncoder).decode()
+    public_key_hex = signing_key.verify_key.encode(encoder=HexEncoder).decode()
+    agent_id = hashlib.sha256(public_key_hex.encode()).hexdigest()[:16]
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO agents (id, name, public_key, created_at, witness_count, witness_accuracy)
+        VALUES (?, ?, ?, ?, 0, 0.0)
+        """,
+        (agent_id, clean_name, public_key_hex, _utc_now()),
+    )
+    token = secrets.token_urlsafe(24)
+    session = {
+        "token": token,
+        "agent_id": agent_id,
+        "name": clean_name,
+        "private_key_hex": private_key_hex,
+        "public_key_hex": public_key_hex,
+        "created_at_epoch": time.time(),
+    }
+    _WEB_SESSIONS[token] = session
+    return session
+
+
+def _resolve_or_create_web_session(
+    request: Request,
+    conn: sqlite3.Connection,
+    display_name: str,
+) -> Dict[str, Any]:
+    existing = _read_web_session(request)
+    if existing:
+        return existing
+    return _create_web_session(conn, display_name)
+
+
+def _set_web_session_cookie(response: RedirectResponse, session: Dict[str, Any]) -> None:
+    response.set_cookie(
+        key=WEB_SESSION_COOKIE,
+        value=str(session["token"]),
+        httponly=True,
+        max_age=WEB_SESSION_MAX_AGE_SECONDS,
+        samesite="lax",
+    )
 
 
 def _load_or_create_system_signing_key(path: Path) -> SigningKey:
@@ -424,6 +611,102 @@ def _serialize_spark_row(row: sqlite3.Row) -> Dict[str, Any]:
     }
 
 
+def _compost_why_card(conn: sqlite3.Connection, spark_id: int, gate_scores: Dict[str, Any]) -> Dict[str, str]:
+    witness_row = conn.execute(
+        """
+        SELECT payload
+        FROM witness_chain
+        WHERE spark_id = ? AND action = 'compost'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (spark_id,),
+    ).fetchone()
+    challenge_row = conn.execute(
+        """
+        SELECT content
+        FROM spark_challenges
+        WHERE spark_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (spark_id,),
+    ).fetchone()
+
+    reason = "Composted by witness action."
+    source = "witness"
+    if witness_row:
+        try:
+            payload = json.loads(str(witness_row["payload"]))
+            payload_reason = str(payload.get("reason", "")).strip()
+            if payload_reason == "ahimsa_gate_failed":
+                reason = "Failed Ahimsa safety gate."
+                source = "safety"
+            elif payload_reason:
+                reason = payload_reason.replace("_", " ")
+        except json.JSONDecodeError:
+            pass
+
+    if challenge_row is not None and source != "safety":
+        excerpt = str(challenge_row["content"]).strip().replace("\n", " ")
+        if excerpt:
+            reason = f"Challenge pressure: {excerpt[:180]}"
+            source = "challenge"
+
+    rv = _rv_card(gate_scores)
+    return {
+        "title": "WHY this is compost",
+        "reason": reason,
+        "source": source,
+        "rv_note": rv["status_text"],
+    }
+
+
+def _web_feed_items(
+    conn: sqlite3.Connection,
+    *,
+    status_filter: str,
+    sort_mode: str,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    where = ""
+    params: List[Any] = []
+    if status_filter != "all":
+        where = "WHERE s.status = ?"
+        params.append(status_filter)
+
+    rows = conn.execute(
+        f"""
+        SELECT
+            s.*,
+            (SELECT COUNT(*) FROM spark_challenges c WHERE c.spark_id = s.id) AS challenge_count,
+            (SELECT COUNT(*) FROM witness_chain w WHERE w.spark_id = s.id) AS witness_count
+        FROM sparks s
+        {where}
+        ORDER BY s.created_at DESC
+        LIMIT ?
+        """,
+        (*params, limit),
+    ).fetchall()
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        item = _serialize_spark_row(row)
+        item["challenge_count"] = int(row["challenge_count"] or 0)
+        item["witness_count"] = int(row["witness_count"] or 0)
+        item["dimensions_17"] = _dimension_profile(item["gate_scores"])
+        item["rv_card"] = _rv_card(item["gate_scores"])
+        if item["status"] == "compost":
+            item["compost_why"] = _compost_why_card(conn, item["id"], item["gate_scores"])
+        items.append(item)
+
+    if sort_mode == "most-challenged":
+        items.sort(
+            key=lambda item: (int(item.get("challenge_count", 0)), str(item.get("created_at", ""))),
+            reverse=True,
+        )
+    return items
+
+
 class AgentRegisterRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=80)
     public_key: str = Field(..., min_length=64, max_length=128)
@@ -478,6 +761,7 @@ app = FastAPI(
     version=SAB_VERSION,
     lifespan=lifespan,
 )
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.post("/api/agents/register", status_code=status.HTTP_201_CREATED)
@@ -619,6 +903,7 @@ async def submit_spark(req: SparkSubmitRequest) -> Dict[str, Any]:
         row = conn.execute("SELECT * FROM sparks WHERE id = ?", (spark_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=500, detail="spark persisted but not found")
+        _invalidate_web_cache()
         return _serialize_spark_row(row)
 
 
@@ -707,6 +992,7 @@ async def challenge_spark(spark_id: int, req: ChallengeCreateRequest) -> Dict[st
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=500, detail="challenge persisted but not found")
+        _invalidate_web_cache()
         return dict(row)
 
 
@@ -785,6 +1071,7 @@ async def witness_sign(req: WitnessSignRequest) -> Dict[str, Any]:
 
         status_row = conn.execute("SELECT status FROM sparks WHERE id = ?", (req.spark_id,)).fetchone()
         spark_status = str(status_row["status"]) if status_row else "unknown"
+        _invalidate_web_cache()
 
         return {
             "spark_id": req.spark_id,
@@ -829,6 +1116,63 @@ def _load_feed(conn: sqlite3.Connection, *, status_value: str, limit: int, gate_
 
     items.sort(key=lambda item: (gate_score(item), item.get("created_at", "")), reverse=True)
     return items
+
+
+def _render_template(
+    request: Request,
+    template_name: str,
+    context: Dict[str, Any],
+    *,
+    status_code: int = 200,
+) -> HTMLResponse:
+    payload = {"request": request, **context}
+    return templates.TemplateResponse(request, template_name, payload, status_code=status_code)
+
+
+def _spark_with_details(conn: sqlite3.Connection, spark_id: int) -> Optional[Dict[str, Any]]:
+    row = conn.execute(
+        """
+        SELECT
+            s.*,
+            (SELECT COUNT(*) FROM spark_challenges c WHERE c.spark_id = s.id) AS challenge_count,
+            (SELECT COUNT(*) FROM witness_chain w WHERE w.spark_id = s.id) AS witness_count
+        FROM sparks s
+        WHERE s.id = ?
+        """,
+        (spark_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    data = _serialize_spark_row(row)
+    data["challenge_count"] = int(row["challenge_count"] or 0)
+    data["witness_count"] = int(row["witness_count"] or 0)
+    data["dimensions_17"] = _dimension_profile(data["gate_scores"])
+    data["rv_card"] = _rv_card(data["gate_scores"])
+    if data["status"] == "compost":
+        data["compost_why"] = _compost_why_card(conn, data["id"], data["gate_scores"])
+    return data
+
+
+def _web_feed_context(
+    conn: sqlite3.Connection,
+    *,
+    status_filter: str,
+    sort_mode: str,
+    limit: int,
+) -> Dict[str, Any]:
+    cache_key = f"{status_filter}:{sort_mode}:{limit}"
+    cached = _cache_get(cache_key)
+    if cached is None:
+        items = _web_feed_items(conn, status_filter=status_filter, sort_mode=sort_mode, limit=limit)
+        _cache_set(cache_key, items)
+    else:
+        items = cached
+    return {
+        "items": items,
+        "status_filter": status_filter,
+        "sort_mode": sort_mode,
+        "limit": limit,
+    }
 
 
 @app.get("/api/feed")
@@ -921,3 +1265,406 @@ async def node_status() -> Dict[str, Any]:
         "recent_witness": recent_witness,
         "timestamp": _utc_now(),
     }
+
+
+@app.get("/", response_class=HTMLResponse)
+async def web_home(
+    request: Request,
+    mode: str = Query("newest", pattern="^(newest|most-challenged|canon|compost)$"),
+    limit: int = Query(30, ge=1, le=100),
+) -> HTMLResponse:
+    init_db()
+    status_filter = "spark"
+    sort_mode = "newest"
+    if mode == "most-challenged":
+        sort_mode = "most-challenged"
+    elif mode == "canon":
+        status_filter = "canon"
+    elif mode == "compost":
+        status_filter = "compost"
+
+    with _db() as conn:
+        feed_context = _web_feed_context(
+            conn,
+            status_filter=status_filter,
+            sort_mode=sort_mode,
+            limit=limit,
+        )
+
+    session = _read_web_session(request)
+    return _render_template(
+        request,
+        "web_feed.html",
+        {
+            **feed_context,
+            "title": "SAB Feed",
+            "mode": mode,
+            "path_name": "/",
+            "session": session,
+        },
+    )
+
+
+@app.get("/canon", response_class=HTMLResponse)
+async def web_canon(
+    request: Request,
+    sort: str = Query("newest", pattern="^(newest|most-challenged)$"),
+    limit: int = Query(30, ge=1, le=100),
+) -> HTMLResponse:
+    init_db()
+    with _db() as conn:
+        feed_context = _web_feed_context(
+            conn,
+            status_filter="canon",
+            sort_mode=sort,
+            limit=limit,
+        )
+    return _render_template(
+        request,
+        "web_feed.html",
+        {
+            **feed_context,
+            "title": "Canon",
+            "mode": "canon",
+            "path_name": "/canon",
+            "session": _read_web_session(request),
+        },
+    )
+
+
+@app.get("/compost", response_class=HTMLResponse)
+async def web_compost(
+    request: Request,
+    sort: str = Query("newest", pattern="^(newest|most-challenged)$"),
+    limit: int = Query(30, ge=1, le=100),
+) -> HTMLResponse:
+    init_db()
+    with _db() as conn:
+        feed_context = _web_feed_context(
+            conn,
+            status_filter="compost",
+            sort_mode=sort,
+            limit=limit,
+        )
+    return _render_template(
+        request,
+        "web_feed.html",
+        {
+            **feed_context,
+            "title": "Compost",
+            "mode": "compost",
+            "path_name": "/compost",
+            "session": _read_web_session(request),
+        },
+    )
+
+
+@app.get("/submit", response_class=HTMLResponse)
+async def web_submit_get(request: Request) -> HTMLResponse:
+    return _render_template(
+        request,
+        "web_submit.html",
+        {"session": _read_web_session(request), "error": "", "content": ""},
+    )
+
+
+@app.post("/submit", response_class=HTMLResponse)
+async def web_submit_post(
+    request: Request,
+    content: str = Form(...),
+    display_name: str = Form(""),
+    content_type: Literal["text", "code", "link"] = Form("text"),
+) -> HTMLResponse:
+    body = (content or "").strip()
+    if not body:
+        return _render_template(
+            request,
+            "web_submit.html",
+            {"session": _read_web_session(request), "error": "Content is required.", "content": body},
+            status_code=400,
+        )
+
+    init_db()
+    with _db() as conn:
+        session = _resolve_or_create_web_session(request, conn, display_name)
+
+    signing_key = _signing_key_from_session(session)
+    content_sha256 = _sha256_hex(body.encode())
+    signature = signing_key.sign(_message_for_submit(str(session["agent_id"]), content_sha256)).signature.hex()
+    submit_req = SparkSubmitRequest(
+        content=body,
+        content_type=content_type,
+        author_id=str(session["agent_id"]),
+        signature=signature,
+    )
+    spark = await submit_spark(submit_req)
+
+    response = RedirectResponse(url=f"/spark/{int(spark['id'])}?submitted=1", status_code=303)
+    if request.cookies.get(WEB_SESSION_COOKIE) != session["token"]:
+        _set_web_session_cookie(response, session)
+    return response
+
+
+@app.get("/spark/{spark_id}", response_class=HTMLResponse)
+async def web_spark_detail(
+    request: Request,
+    spark_id: int,
+    submitted: int = Query(0, ge=0, le=1),
+) -> HTMLResponse:
+    init_db()
+    with _db() as conn:
+        spark = _spark_with_details(conn, spark_id)
+        if spark is None:
+            raise HTTPException(status_code=404, detail="spark not found")
+        challenge_rows = conn.execute(
+            """
+            SELECT id, spark_id, challenger_id, content, created_at, resolution
+            FROM spark_challenges
+            WHERE spark_id = ?
+            ORDER BY id ASC
+            """,
+            (spark_id,),
+        ).fetchall()
+        challenges = [dict(row) for row in challenge_rows]
+
+        chain_rows = conn.execute(
+            """
+            SELECT id, spark_id, witness_id, action, payload, timestamp, prev_hash, hash
+            FROM witness_chain
+            WHERE spark_id = ?
+            ORDER BY id ASC
+            """,
+            (spark_id,),
+        ).fetchall()
+        timeline: List[Dict[str, Any]] = []
+        for row in chain_rows:
+            payload_obj: Any = {}
+            try:
+                payload_obj = json.loads(str(row["payload"]))
+            except json.JSONDecodeError:
+                payload_obj = {"raw": str(row["payload"])}
+            timeline.append(
+                {
+                    "id": int(row["id"]),
+                    "witness_id": str(row["witness_id"]),
+                    "action": str(row["action"]),
+                    "payload": payload_obj,
+                    "timestamp": str(row["timestamp"]),
+                    "hash": str(row["hash"]),
+                    "prev_hash": str(row["prev_hash"]),
+                }
+            )
+
+    return _render_template(
+        request,
+        "web_spark_detail.html",
+        {
+            "spark": spark,
+            "challenges": challenges,
+            "timeline": timeline,
+            "submitted": bool(submitted),
+            "session": _read_web_session(request),
+        },
+    )
+
+
+@app.post("/spark/{spark_id}/challenge", response_class=HTMLResponse)
+async def web_challenge_post(
+    request: Request,
+    spark_id: int,
+    content: str = Form(...),
+    display_name: str = Form(""),
+) -> HTMLResponse:
+    body = (content or "").strip()
+    if not body:
+        return RedirectResponse(url=f"/spark/{spark_id}?challenge_error=1", status_code=303)
+
+    init_db()
+    with _db() as conn:
+        session = _resolve_or_create_web_session(request, conn, display_name)
+
+    signing_key = _signing_key_from_session(session)
+    content_sha256 = _sha256_hex(body.encode())
+    signature = signing_key.sign(
+        _message_for_challenge(spark_id, str(session["agent_id"]), content_sha256)
+    ).signature.hex()
+    challenge_req = ChallengeCreateRequest(
+        challenger_id=str(session["agent_id"]),
+        content=body,
+        signature=signature,
+    )
+    await challenge_spark(spark_id, challenge_req)
+
+    response = RedirectResponse(url=f"/spark/{spark_id}#challenges", status_code=303)
+    if request.cookies.get(WEB_SESSION_COOKIE) != session["token"]:
+        _set_web_session_cookie(response, session)
+    return response
+
+
+@app.post("/spark/{spark_id}/witness", response_class=HTMLResponse)
+async def web_witness_post(
+    request: Request,
+    spark_id: int,
+    action: Literal["affirm", "canon_affirm", "compost"] = Form("affirm"),
+    note: str = Form(""),
+    display_name: str = Form(""),
+) -> HTMLResponse:
+    init_db()
+    with _db() as conn:
+        session = _resolve_or_create_web_session(request, conn, display_name)
+
+    payload = {
+        "note": (note or "").strip()[:500],
+        "source": "web_surface",
+    }
+    signing_key = _signing_key_from_session(session)
+    payload_sha = _sha256_hex(_canonical_bytes(payload))
+    signature = signing_key.sign(
+        _message_for_witness(spark_id, str(session["agent_id"]), action, payload_sha)
+    ).signature.hex()
+    witness_req = WitnessSignRequest(
+        spark_id=spark_id,
+        witness_id=str(session["agent_id"]),
+        action=action,
+        payload=payload,
+        signature=signature,
+    )
+    await witness_sign(witness_req)
+
+    response = RedirectResponse(url=f"/spark/{spark_id}#timeline", status_code=303)
+    if request.cookies.get(WEB_SESSION_COOKIE) != session["token"]:
+        _set_web_session_cookie(response, session)
+    return response
+
+
+@app.get("/register", response_class=HTMLResponse)
+async def web_register_get(request: Request) -> HTMLResponse:
+    return _render_template(
+        request,
+        "web_register.html",
+        {"session": _read_web_session(request), "error": ""},
+    )
+
+
+@app.post("/register", response_class=HTMLResponse)
+async def web_register_post(request: Request, display_name: str = Form(...)) -> HTMLResponse:
+    init_db()
+    with _db() as conn:
+        session = _create_web_session(conn, display_name)
+    response = RedirectResponse(url=f"/agent/{session['agent_id']}", status_code=303)
+    _set_web_session_cookie(response, session)
+    return response
+
+
+@app.get("/agent/{agent_id}", response_class=HTMLResponse)
+async def web_agent_profile(request: Request, agent_id: str) -> HTMLResponse:
+    init_db()
+    with _db() as conn:
+        agent = conn.execute(
+            "SELECT id, name, public_key, created_at, witness_count, witness_accuracy FROM agents WHERE id = ?",
+            (agent_id,),
+        ).fetchone()
+        if agent is None:
+            raise HTTPException(status_code=404, detail="agent not found")
+
+        submitted_count = int(
+            conn.execute("SELECT COUNT(*) AS c FROM sparks WHERE author_id = ?", (agent_id,)).fetchone()["c"]
+        )
+        canon_count = int(
+            conn.execute(
+                "SELECT COUNT(*) AS c FROM sparks WHERE author_id = ? AND status = 'canon'",
+                (agent_id,),
+            ).fetchone()["c"]
+        )
+        compost_count = int(
+            conn.execute(
+                "SELECT COUNT(*) AS c FROM sparks WHERE author_id = ? AND status = 'compost'",
+                (agent_id,),
+            ).fetchone()["c"]
+        )
+        challenge_made = int(
+            conn.execute(
+                "SELECT COUNT(*) AS c FROM spark_challenges WHERE challenger_id = ?",
+                (agent_id,),
+            ).fetchone()["c"]
+        )
+        challenged_total = int(
+            conn.execute(
+                """
+                SELECT COUNT(DISTINCT c.spark_id) AS c
+                FROM spark_challenges c
+                JOIN sparks s ON s.id = c.spark_id
+                WHERE s.author_id = ?
+                """,
+                (agent_id,),
+            ).fetchone()["c"]
+        )
+        challenged_survived = int(
+            conn.execute(
+                """
+                SELECT COUNT(DISTINCT c.spark_id) AS c
+                FROM spark_challenges c
+                JOIN sparks s ON s.id = c.spark_id
+                WHERE s.author_id = ? AND s.status != 'compost'
+                """,
+                (agent_id,),
+            ).fetchone()["c"]
+        )
+        attestation_total = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM witness_chain
+                WHERE witness_id = ? AND action IN ('affirm', 'canon_affirm')
+                """,
+                (agent_id,),
+            ).fetchone()["c"]
+        )
+        attestation_on_canon = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM witness_chain w
+                JOIN sparks s ON s.id = w.spark_id
+                WHERE w.witness_id = ? AND w.action IN ('affirm', 'canon_affirm') AND s.status = 'canon'
+                """,
+                (agent_id,),
+            ).fetchone()["c"]
+        )
+
+    canon_rate = (canon_count / submitted_count) if submitted_count else None
+    challenge_survival = (challenged_survived / challenged_total) if challenged_total else None
+    witness_accuracy = (attestation_on_canon / attestation_total) if attestation_total else None
+    reliability = [
+        {"label": "Canonization Rate", "value": canon_rate},
+        {"label": "Challenge Survival", "value": challenge_survival},
+        {"label": "Witness Accuracy", "value": witness_accuracy},
+    ]
+    return _render_template(
+        request,
+        "web_agent_profile.html",
+        {
+            "agent": dict(agent),
+            "stats": {
+                "submitted_count": submitted_count,
+                "canon_count": canon_count,
+                "compost_count": compost_count,
+                "challenge_made": challenge_made,
+                "challenged_total": challenged_total,
+                "challenged_survived": challenged_survived,
+                "attestation_total": attestation_total,
+                "attestation_on_canon": attestation_on_canon,
+            },
+            "reliability": reliability,
+            "session": _read_web_session(request),
+        },
+    )
+
+
+@app.get("/about", response_class=HTMLResponse)
+async def web_about(request: Request) -> HTMLResponse:
+    return _render_template(
+        request,
+        "web_about.html",
+        {"session": _read_web_session(request), "dimensions_count": len(SAB_17_DIMENSIONS)},
+    )

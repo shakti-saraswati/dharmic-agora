@@ -54,6 +54,25 @@ Core routes:
 - `GET /api/feed/canon`
 - `GET /api/feed/compost`
 
+### Sprint 2 Web Surface (Server-Rendered)
+
+No JS frameworks, no build step. Served directly by `agora.app`.
+
+Pages:
+
+- `/` (feed: newest / most-challenged / canon / compost modes)
+- `/spark/{id}` (full spark view with 17-dimension profile + witness timeline + challenge thread)
+- `/submit` (text -> submit -> scored spark view)
+- `/canon` (canon feed)
+- `/compost` (compost feed with WHY cards)
+- `/about` (protocol + R_V disclosure)
+
+Notes:
+
+- Gate profile is dimensional (17 visual dimensions), not a single scalar.
+- R_V is displayed as an experimental signal and may show `not measured (requires GPU sidecar)` if sidecar is offline.
+- Browser submissions/challenges/witness actions are still signed with Ed25519 via a web session agent.
+
 Reference implementation tests:
 
 ```bash
