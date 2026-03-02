@@ -49,9 +49,24 @@ CANON_QUORUM = int(os.getenv("SAB_CANON_QUORUM", "3"))
 APP_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = APP_DIR / "templates"
 STATIC_DIR = APP_DIR / "static"
-WEB_SESSION_COOKIE = "sab_web_session"
+WEB_SESSION_COOKIE = os.getenv("SAB_WEB_SESSION_COOKIE_NAME", "sab_web_session")
 WEB_SESSION_MAX_AGE_SECONDS = int(os.getenv("SAB_WEB_SESSION_MAX_AGE_SECONDS", str(7 * 24 * 3600)))
 WEB_CACHE_TTL_SECONDS = int(os.getenv("SAB_WEB_CACHE_TTL_SECONDS", "15"))
+WEB_SESSION_COOKIE_SECURE = os.getenv("SAB_WEB_SESSION_COOKIE_SECURE", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+WEB_SESSION_COOKIE_HTTPONLY = os.getenv("SAB_WEB_SESSION_COOKIE_HTTPONLY", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+WEB_SESSION_COOKIE_SAMESITE = os.getenv("SAB_WEB_SESSION_COOKIE_SAMESITE", "lax").lower()
+if WEB_SESSION_COOKIE_SAMESITE not in ("lax", "strict", "none"):
+    WEB_SESSION_COOKIE_SAMESITE = "lax"
 
 # Canonical 17-dimension profile used for UI visualization.
 SAB_17_DIMENSIONS: List[Dict[str, str]] = [
@@ -196,6 +211,19 @@ def _read_web_session(request: Request) -> Optional[Dict[str, Any]]:
     return _WEB_SESSIONS.get(token)
 
 
+def _session_for_template(request: Request) -> Optional[Dict[str, Any]]:
+    session = _read_web_session(request)
+    if not session:
+        return None
+    return {
+        "token": str(session["token"]),
+        "agent_id": str(session["agent_id"]),
+        "name": str(session["name"]),
+        "public_key_hex": str(session["public_key_hex"]),
+        "created_at_epoch": float(session["created_at_epoch"]),
+    }
+
+
 def _signing_key_from_session(session: Dict[str, Any]) -> SigningKey:
     return SigningKey(str(session["private_key_hex"]).encode(), encoder=HexEncoder)
 
@@ -241,9 +269,10 @@ def _set_web_session_cookie(response: RedirectResponse, session: Dict[str, Any])
     response.set_cookie(
         key=WEB_SESSION_COOKIE,
         value=str(session["token"]),
-        httponly=True,
+        httponly=WEB_SESSION_COOKIE_HTTPONLY,
+        secure=WEB_SESSION_COOKIE_SECURE,
         max_age=WEB_SESSION_MAX_AGE_SECONDS,
-        samesite="lax",
+        samesite=WEB_SESSION_COOKIE_SAMESITE,
     )
 
 
@@ -1262,9 +1291,90 @@ async def node_status() -> Dict[str, Any]:
             "pending_challenges": challenge_pending,
         },
         "gate_averages": gate_averages,
+        "web_cache": {
+            "entries": len(_WEB_CACHE),
+            "ttl_seconds": WEB_CACHE_TTL_SECONDS,
+        },
         "recent_witness": recent_witness,
         "timestamp": _utc_now(),
     }
+
+
+@app.get("/health")
+async def health() -> Dict[str, Any]:
+    """
+    Legacy-compatible health endpoint.
+
+    Kept intentionally lightweight so existing scripts that probe `/health`
+    continue to work when running `agora.app`.
+    """
+    return {
+        "status": "healthy",
+        "service": "sab-basin-app",
+        "version": SAB_VERSION,
+        "timestamp": _utc_now(),
+    }
+
+
+@app.get("/healthz")
+async def healthz() -> Dict[str, Any]:
+    return {
+        "status": "ok",
+        "service": "sab-basin-app",
+        "version": SAB_VERSION,
+        "timestamp": _utc_now(),
+    }
+
+
+@app.get("/readyz")
+async def readyz() -> Dict[str, Any]:
+    checks: Dict[str, Any] = {
+        "db": {"ok": False},
+        "system_key": {"ok": False},
+    }
+    errors: List[str] = []
+
+    try:
+        init_db()
+        with _db() as conn:
+            conn.execute("SELECT 1").fetchone()
+        checks["db"] = {"ok": True, "path": str(SPARK_DB)}
+    except Exception as exc:  # pragma: no cover - protective catch
+        errors.append(f"db_check_failed:{exc.__class__.__name__}")
+
+    try:
+        checks["system_key"] = {
+            "ok": bool(SYSTEM_VERIFY_KEY_HEX),
+            "key_path": str(SYSTEM_KEY_PATH),
+        }
+        if not SYSTEM_VERIFY_KEY_HEX:
+            errors.append("system_key_missing")
+    except Exception as exc:  # pragma: no cover - protective catch
+        errors.append(f"system_key_check_failed:{exc.__class__.__name__}")
+
+    ready = len(errors) == 0
+    return {
+        "status": "ready" if ready else "not_ready",
+        "ready": ready,
+        "checks": checks,
+        "errors": errors,
+        "timestamp": _utc_now(),
+    }
+
+
+@app.get("/api/web/cache/status")
+async def web_cache_status(verbose: bool = Query(False)) -> Dict[str, Any]:
+    _cleanup_web_sessions()
+    payload: Dict[str, Any] = {
+        "status": "ok",
+        "cache_entries": len(_WEB_CACHE),
+        "cache_ttl_seconds": WEB_CACHE_TTL_SECONDS,
+        "session_entries": len(_WEB_SESSIONS),
+        "timestamp": _utc_now(),
+    }
+    if verbose:
+        payload["cache_keys"] = sorted(list(_WEB_CACHE.keys()))
+    return payload
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1327,7 +1437,7 @@ async def web_canon(
             "title": "Canon",
             "mode": "canon",
             "path_name": "/canon",
-            "session": _read_web_session(request),
+            "session": _session_for_template(request),
         },
     )
 
@@ -1354,7 +1464,7 @@ async def web_compost(
             "title": "Compost",
             "mode": "compost",
             "path_name": "/compost",
-            "session": _read_web_session(request),
+            "session": _session_for_template(request),
         },
     )
 
@@ -1364,7 +1474,7 @@ async def web_submit_get(request: Request) -> HTMLResponse:
     return _render_template(
         request,
         "web_submit.html",
-        {"session": _read_web_session(request), "error": "", "content": ""},
+        {"session": _session_for_template(request), "error": "", "content": ""},
     )
 
 
@@ -1380,7 +1490,7 @@ async def web_submit_post(
         return _render_template(
             request,
             "web_submit.html",
-            {"session": _read_web_session(request), "error": "Content is required.", "content": body},
+            {"session": _session_for_template(request), "error": "Content is required.", "content": body},
             status_code=400,
         )
 
@@ -1463,7 +1573,7 @@ async def web_spark_detail(
             "challenges": challenges,
             "timeline": timeline,
             "submitted": bool(submitted),
-            "session": _read_web_session(request),
+            "session": _session_for_template(request),
         },
     )
 
@@ -1542,7 +1652,7 @@ async def web_register_get(request: Request) -> HTMLResponse:
     return _render_template(
         request,
         "web_register.html",
-        {"session": _read_web_session(request), "error": ""},
+        {"session": _session_for_template(request), "error": ""},
     )
 
 
@@ -1656,7 +1766,7 @@ async def web_agent_profile(request: Request, agent_id: str) -> HTMLResponse:
                 "attestation_on_canon": attestation_on_canon,
             },
             "reliability": reliability,
-            "session": _read_web_session(request),
+            "session": _session_for_template(request),
         },
     )
 
@@ -1666,5 +1776,5 @@ async def web_about(request: Request) -> HTMLResponse:
     return _render_template(
         request,
         "web_about.html",
-        {"session": _read_web_session(request), "dimensions_count": len(SAB_17_DIMENSIONS)},
+        {"session": _session_for_template(request), "dimensions_count": len(SAB_17_DIMENSIONS)},
     )

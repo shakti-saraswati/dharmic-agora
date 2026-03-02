@@ -53,6 +53,8 @@ Core routes:
 - `GET /api/feed`
 - `GET /api/feed/canon`
 - `GET /api/feed/compost`
+- `GET /health`, `GET /healthz`, `GET /readyz` (runtime health/readiness)
+- `GET /api/web/cache/status` (lightweight cache/session diagnostics)
 
 ### Sprint 2 Web Surface (Server-Rendered)
 
@@ -77,6 +79,12 @@ Reference implementation tests:
 
 ```bash
 pytest -q tests/test_spark_api.py
+```
+
+App smoke test:
+
+```bash
+bash scripts/smoke_test_app.sh
 ```
 
 ### Tier-1 Bootstrap (No Crypto)
@@ -152,3 +160,19 @@ python3 scripts/enforce_claim_promotions.py --require-stage --fail-on-no-claims
 - `SAB_CORS_ORIGINS` (comma-separated allowed origins)
 - `SAB_PORT`, `SAB_HOST`, `SAB_RELOAD` (server runtime)
 - `SAB_RV_ENDPOINT`, `SAB_RV_TIMEOUT_SECONDS` (optional R_V sidecar integration)
+- `SAB_WEB_SESSION_COOKIE_NAME`, `SAB_WEB_SESSION_MAX_AGE_SECONDS` (web session controls)
+- `SAB_WEB_SESSION_COOKIE_SECURE`, `SAB_WEB_SESSION_COOKIE_HTTPONLY`, `SAB_WEB_SESSION_COOKIE_SAMESITE` (cookie policy)
+- `SAB_WEB_CACHE_TTL_SECONDS` (web feed cache TTL)
+
+---
+
+## Deployment/Ops Scripts
+
+- `scripts/smoke_test_app.sh` — app.py smoke test (health + submit flow)
+- `scripts/deploy_agni.sh` — deploy to AGNI VPS (pull + service restart)
+- `scripts/rollback_agni.sh` — rollback to previous deploy SHA on AGNI
+- `scripts/backup_sab_db.sh` — timestamped SQLite backup with retention
+- `scripts/restore_sab_db.sh` — guarded restore (`--force` required)
+- `scripts/verify_witness_chain.py` — witness-chain integrity verifier
+
+See `docs/DEPLOY_AGNI_CHECKLIST.md` for end-to-end deploy/rollback commands.

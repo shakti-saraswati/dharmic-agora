@@ -1,0 +1,31 @@
+[Unit]
+Description=SAB Basin App (FastAPI + Uvicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+WorkingDirectory=/home/openclaw/repos/saraswati-dharmic-agora
+EnvironmentFile=/home/openclaw/repos/saraswati-dharmic-agora/.env
+Environment=SAB_HOST=127.0.0.1
+Environment=SAB_PORT=8000
+Environment=SAB_SPARK_DB_PATH=/home/openclaw/repos/saraswati-dharmic-agora/data/sab.db
+Environment=SAB_SYSTEM_WITNESS_KEY=/home/openclaw/repos/saraswati-dharmic-agora/data/.sab_system_ed25519.key
+ExecStart=/usr/bin/env python3 -m uvicorn agora.app:app --host ${SAB_HOST} --port ${SAB_PORT}
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+# Security hardening (safe defaults)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths=/home/openclaw/repos/saraswati-dharmic-agora/data
+
+StandardOutput=append:/home/openclaw/repos/saraswati-dharmic-agora/data/sab-app.log
+StandardError=append:/home/openclaw/repos/saraswati-dharmic-agora/data/sab-app.err.log
+
+[Install]
+WantedBy=multi-user.target

@@ -291,3 +291,59 @@ def test_invalid_signature_rejected(client: TestClient):
     )
     assert submit.status_code == 400
     assert "Invalid Ed25519 signature" in submit.text
+
+
+def test_challenge_signature_mismatch_rejected(client: TestClient):
+    author_sk = SigningKey.generate()
+    wrong_sk = SigningKey.generate()
+    author_id = _register(client, author_sk, "author-mismatch")
+
+    content = "Spark for challenge mismatch test."
+    submit_sig = _sign_submit(author_sk, author_id, content)
+    submit = client.post(
+        "/api/spark/submit",
+        json={"content": content, "content_type": "text", "author_id": author_id, "signature": submit_sig},
+    )
+    assert submit.status_code == 201, submit.text
+    spark_id = int(submit.json()["id"])
+
+    challenge_text = "This should fail due to signature mismatch."
+    bad_challenge_sig = _sign_challenge(wrong_sk, spark_id, author_id, challenge_text)
+    challenge = client.post(
+        f"/api/spark/{spark_id}/challenge",
+        json={"challenger_id": author_id, "content": challenge_text, "signature": bad_challenge_sig},
+    )
+    assert challenge.status_code == 400
+    assert "Invalid Ed25519 signature" in challenge.text
+
+
+def test_witness_signature_mismatch_rejected(client: TestClient):
+    author_sk = SigningKey.generate()
+    witness_sk = SigningKey.generate()
+    wrong_sk = SigningKey.generate()
+    author_id = _register(client, author_sk, "author-witness-mismatch")
+    witness_id = _register(client, witness_sk, "witness-mismatch")
+
+    content = "Spark for witness signature mismatch test."
+    submit_sig = _sign_submit(author_sk, author_id, content)
+    submit = client.post(
+        "/api/spark/submit",
+        json={"content": content, "content_type": "text", "author_id": author_id, "signature": submit_sig},
+    )
+    assert submit.status_code == 201, submit.text
+    spark_id = int(submit.json()["id"])
+
+    payload = {"note": "affirmation attempt"}
+    bad_witness_sig = _sign_witness(wrong_sk, spark_id, witness_id, "affirm", payload)
+    witness = client.post(
+        "/api/witness/sign",
+        json={
+            "spark_id": spark_id,
+            "witness_id": witness_id,
+            "action": "affirm",
+            "payload": payload,
+            "signature": bad_witness_sig,
+        },
+    )
+    assert witness.status_code == 400
+    assert "Invalid Ed25519 signature" in witness.text

@@ -110,6 +110,7 @@ Naming note:
 - `docs/SAB_SHADOW_LOOP_TODO.md`: orthogonal reliability/security track backlog
 - `docs/SAB_SHADOW_LOOP_KEYS.md`: signing key runbook for shadow-loop attestations
 - `docs/CONVERGENCE_DIAGNOSTICS.md`: production DGC -> trust-gradient interface and payload contract
+- `docs/DEPLOY_AGNI_CHECKLIST.md`: AGNI deploy, health checks, and rollback runbook
 
 ### `agora/security/` (shadow loop security primitives)
 
@@ -119,6 +120,12 @@ Naming note:
 - `agora/security/safety_case_report.py`: safety report with live evidence
 - `agora/security/policy/*.yaml`: thresholds and signing policy defaults
 - `scripts/orthogonal_safety_loop.py`: one-command loop runner
+- `scripts/smoke_test_app.sh`: app.py runtime smoke test (`/health`, submit flow)
+- `scripts/deploy_agni.sh`: AGNI deployment helper (pull + service restart)
+- `scripts/rollback_agni.sh`: AGNI rollback helper
+- `scripts/backup_sab_db.sh`: SQLite backup with retention
+- `scripts/restore_sab_db.sh`: guarded restore helper
+- `scripts/verify_witness_chain.py`: witness chain integrity verifier
 
 ### `models/` (model bus)
 

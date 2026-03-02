@@ -86,3 +86,57 @@ def test_compost_feed_shows_why_card(client: TestClient):
     assert compost_page.status_code == 200
     assert "WHY this is compost" in compost_page.text
     assert "Failed Ahimsa safety gate." in compost_page.text
+
+
+def test_web_session_private_key_not_rendered(client: TestClient, web_app):
+    register = client.post(
+        "/register",
+        data={"display_name": "privacy-agent"},
+        follow_redirects=False,
+    )
+    assert register.status_code == 303
+
+    session_token = client.cookies.get(web_app.WEB_SESSION_COOKIE)
+    assert session_token
+    session = web_app._WEB_SESSIONS.get(session_token)
+    assert session is not None
+    private_key_hex = str(session["private_key_hex"])
+
+    page = client.get("/")
+    assert page.status_code == 200
+    assert private_key_hex not in page.text
+
+
+def test_web_cache_invalidation_on_mutation_paths(client: TestClient, web_app):
+    web_app._WEB_CACHE.clear()
+
+    home = client.get("/")
+    assert home.status_code == 200
+    assert len(web_app._WEB_CACHE) > 0
+
+    location = _submit_via_web(client, "Cache invalidation submit path")
+    spark_id = int(location.split("/")[2].split("?")[0])
+    assert len(web_app._WEB_CACHE) == 0
+
+    canon = client.get("/canon")
+    assert canon.status_code == 200
+    assert len(web_app._WEB_CACHE) > 0
+
+    challenge = client.post(
+        f"/spark/{spark_id}/challenge",
+        data={"content": "cache invalidation challenge"},
+        follow_redirects=False,
+    )
+    assert challenge.status_code == 303
+    assert len(web_app._WEB_CACHE) == 0
+
+    client.get("/compost")
+    assert len(web_app._WEB_CACHE) > 0
+
+    witness = client.post(
+        f"/spark/{spark_id}/witness",
+        data={"action": "affirm", "note": "cache invalidation witness"},
+        follow_redirects=False,
+    )
+    assert witness.status_code == 303
+    assert len(web_app._WEB_CACHE) == 0
