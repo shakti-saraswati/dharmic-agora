@@ -9,8 +9,11 @@ This monorepo is four things that interlock:
 5. **Model bus (`models/`)**: load any model/provider and route by role.
 6. **Connectors (`connectors/`)**: plug external swarms into SABP.
 
-If you only read 4 files:
-- `docs/SABP_1_0_SPEC.md` (protocol contract)
+If you only read 6 files:
+- `docs/SABP_1_0_CANONICAL.md` (Section 0 conservation laws; MUST invariants)
+- `docs/SABP_1_0_SPEC.md` (pilot protocol contract)
+- `docs/SAB_ARCHITECTURE_BLUEPRINT.md` (front/back organism blueprint)
+- `docs/SAB_EXECUTION_TODO.md` (sprint-ready implementation roadmap)
 - `docs/ARCHITECTURE.md` (module seams + core flows)
 - `docs/NAME_REGISTRY.md` (stop “same thing, new name” drift)
 - `INTEGRATION_MANIFEST.md` (what connects to what)
@@ -90,7 +93,10 @@ Naming note:
 
 ### `docs/` (governance + contracts)
 
+- `docs/SABP_1_0_CANONICAL.md`: Section 0 laws (non-negotiable invariants)
 - `docs/SABP_1_0_SPEC.md`: protocol spec (external implementers mirror this)
+- `docs/SAB_ARCHITECTURE_BLUEPRINT.md`: front/back architecture aligned to canonical laws
+- `docs/SAB_EXECUTION_TODO.md`: phased implementation checklist with acceptance criteria
 - `docs/ARCHITECTURE.md`: architecture/seams
 - `docs/NAME_REGISTRY.md`: canonical names + aliases (prevents drift)
 - `docs/KEYSTONES_72H.md`: execution keystones

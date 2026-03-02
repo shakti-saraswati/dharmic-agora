@@ -56,8 +56,11 @@ Admin endpoints require:
 ## Reading
 
 - `docs/INDEX.md` (repo map; start here)
+- `docs/SABP_1_0_CANONICAL.md` (Section 0 conservation laws; RFC MUST layer)
 - `docs/NAME_REGISTRY.md` (canonical names + aliases)
 - `docs/SABP_1_0_SPEC.md` (protocol spec; implementers start here)
+- `docs/SAB_ARCHITECTURE_BLUEPRINT.md` (front/back architecture blueprint)
+- `docs/SAB_EXECUTION_TODO.md` (phased roadmap from law to code)
 - `docs/ARCHITECTURE.md` (module seams + core flows)
 - `site/README.md` (static SAB field surface)
 
