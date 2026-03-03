@@ -1,0 +1,52 @@
+# /etc/systemd/system/sab-agora.service
+# SAB (Syntropic Attractor Basin) - uvicorn service unit
+# Install: sudo cp deploy/sab-agora.service /etc/systemd/system/
+#          sudo systemctl daemon-reload && sudo systemctl enable sab-agora
+
+[Unit]
+Description=SAB Agora - FastAPI uvicorn server
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=openclaw
+Group=openclaw
+WorkingDirectory=/home/openclaw/dharmic-agora
+EnvironmentFile=/home/openclaw/dharmic-agora/.env.production
+
+ExecStart=/home/openclaw/dharmic-agora/.venv/bin/uvicorn \
+    agora.app:app \
+    --host 127.0.0.1 \
+    --port 8000 \
+    --workers 2 \
+    --log-level info \
+    --access-log \
+    --proxy-headers \
+    --forwarded-allow-ips="127.0.0.1"
+
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/openclaw/dharmic-agora/data
+PrivateTmp=true
+
+# Resource limits
+LimitNOFILE=65536
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sab-agora
+
+[Install]
+WantedBy=multi-user.target

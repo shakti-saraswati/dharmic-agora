@@ -33,14 +33,29 @@ def client(web_app):
         yield test_client
 
 
-def _submit_via_web(client: TestClient, content: str):
+def _get_csrf_token(web_app) -> str:
+    """Extract a CSRF token from the first active web session."""
+    sessions = getattr(web_app, "_WEB_SESSIONS", {})
+    for _token, session_data in sessions.items():
+        csrf = session_data.get("csrf_token", "")
+        if csrf:
+            return csrf
+    return ""
+
+
+def _submit_via_web(client: TestClient, content: str, web_app=None):
+    form_data = {
+        "display_name": "web-agent",
+        "content": content,
+        "content_type": "text",
+    }
+    if web_app is not None:
+        csrf = _get_csrf_token(web_app)
+        if csrf:
+            form_data["_csrf"] = csrf
     response = client.post(
         "/submit",
-        data={
-            "display_name": "web-agent",
-            "content": content,
-            "content_type": "text",
-        },
+        data=form_data,
         follow_redirects=False,
     )
     assert response.status_code == 303, response.text
@@ -64,13 +79,17 @@ def test_submit_flow_renders_dimension_profile(client: TestClient):
     assert "EXPERIMENTAL" in spark_page.text
 
 
-def test_challenge_flow_visible_on_spark_page(client: TestClient):
-    location = _submit_via_web(client, "Spark to challenge.")
+def test_challenge_flow_visible_on_spark_page(client: TestClient, web_app):
+    location = _submit_via_web(client, "Spark to challenge.", web_app=web_app)
     spark_id = int(location.split("/")[2].split("?")[0])
 
+    form_data = {"content": "Challenge argument from web form."}
+    csrf = _get_csrf_token(web_app)
+    if csrf:
+        form_data["_csrf"] = csrf
     challenge = client.post(
         f"/spark/{spark_id}/challenge",
-        data={"content": "Challenge argument from web form."},
+        data=form_data,
         follow_redirects=False,
     )
     assert challenge.status_code == 303
