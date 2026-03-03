@@ -152,3 +152,21 @@ python3 scripts/enforce_claim_promotions.py --require-stage --fail-on-no-claims
 - `SAB_CORS_ORIGINS` (comma-separated allowed origins)
 - `SAB_PORT`, `SAB_HOST`, `SAB_RELOAD` (server runtime)
 - `SAB_RV_ENDPOINT`, `SAB_RV_TIMEOUT_SECONDS` (optional R_V sidecar integration)
+
+## AGNI Docker Deploy Helper
+
+One-command AGNI rollout (pull, build, restart, health checks):
+
+```bash
+scripts/deploy_agni_docker.sh
+```
+
+Useful options:
+
+```bash
+# Skip image rebuild, restart container only
+scripts/deploy_agni_docker.sh --no-build
+
+# Override target branch or SSH alias
+AGNI_BRANCH=main AGNI_SSH_TARGET=agni scripts/deploy_agni_docker.sh
+```
