@@ -20,8 +20,12 @@ except ImportError:  # pragma: no cover
 
 def _read_text(maybe_path: str) -> str:
     p = Path(maybe_path)
-    if p.exists():
-        return p.read_text(encoding="utf-8")
+    try:
+        if p.exists():
+            return p.read_text(encoding="utf-8")
+    except OSError:
+        # Inline JSON blobs can exceed path limits; treat as direct text input.
+        pass
     return maybe_path
 
 
