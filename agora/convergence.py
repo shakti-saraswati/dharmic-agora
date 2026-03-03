@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import sqlite3
 import subprocess
 from contextlib import contextmanager
@@ -1428,10 +1429,21 @@ class ConvergenceStore:
         results: List[Dict[str, Any]] = []
         ok = True
         for command in commands:
+            argv = shlex.split(command)
+            if not argv:
+                results.append(
+                    {
+                        "command": command,
+                        "returncode": 2,
+                        "stdout_tail": "",
+                        "stderr_tail": "empty command",
+                    }
+                )
+                ok = False
+                break
             proc = subprocess.run(
-                command,
+                argv,
                 cwd=str(cwd),
-                shell=True,
                 check=False,
                 capture_output=True,
                 text=True,
