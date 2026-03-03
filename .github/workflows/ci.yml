@@ -97,7 +97,7 @@ jobs:
         docker build -t dharmic-agora:test .
         docker run --rm dharmic-agora:test python -c "import agora; print('Import OK')"
 
-    - name: Deploy smoke check
+    - name: Deploy smoke check (/ and /api/node/status)
       run: |
         set -euo pipefail
         docker run -d --rm --name dharmic-agora-smoke -p 18080:8000 dharmic-agora:test
@@ -105,13 +105,8 @@ jobs:
           docker rm -f dharmic-agora-smoke >/dev/null 2>&1 || true
         }
         trap cleanup EXIT
-
-        for _ in $(seq 1 60); do
-          if curl -fsS http://127.0.0.1:18080/api/node/status >/dev/null; then
-            break
-          fi
-          sleep 1
-        done
-
-        curl -fsS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:18080/ | grep -qx "200"
-        curl -fsS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:18080/api/node/status | grep -qx "200"
+        SMOKE_BASE_URL=http://127.0.0.1:18080 \
+        SMOKE_STATUS_PATH=/api/node/status \
+        SMOKE_ROOT_PATH=/ \
+        SMOKE_TIMEOUT_SECONDS=60 \
+        bash scripts/deploy_smoke_check.sh

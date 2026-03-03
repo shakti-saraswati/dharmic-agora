@@ -170,3 +170,16 @@ scripts/deploy_agni_docker.sh --no-build
 # Override target branch or SSH alias
 AGNI_BRANCH=main AGNI_SSH_TARGET=agni scripts/deploy_agni_docker.sh
 ```
+
+Deterministic workspace guardrails:
+
+```bash
+# Local guard (fails if repo has tracked/untracked changes)
+bash scripts/require_clean_git.sh
+
+# Remote AGNI guard + deploy (enabled by default in deploy_agni_docker.sh)
+AGNI_ENFORCE_CLEAN_LOCAL=1 AGNI_ENFORCE_CLEAN_REPO=1 scripts/deploy_agni_docker.sh
+
+# If AGNI repo is dirty, snapshot it into a local-only WIP branch and restore clean main
+bash scripts/agni_isolate_workspace.sh --apply
+```

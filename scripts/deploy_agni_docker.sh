@@ -27,6 +27,8 @@ Environment variables:
   AGNI_ROOT_PATH          Root probe path (default: /)
   AGNI_TIMEOUT_SECONDS    Wait timeout for health (default: 90)
   AGNI_RESTORE_BRANCH     Restore remote branch after deploy: 1/0 (default: 1)
+  AGNI_ENFORCE_CLEAN_LOCAL Require clean local repo tree: 1/0 (default: 1)
+  AGNI_ENFORCE_CLEAN_REPO  Require clean remote repo tree: 1/0 (default: 1)
 USAGE
 }
 
@@ -65,6 +67,11 @@ AGNI_HEALTH_PATH="${AGNI_HEALTH_PATH:-/api/node/status}"
 AGNI_ROOT_PATH="${AGNI_ROOT_PATH:-/}"
 AGNI_TIMEOUT_SECONDS="${AGNI_TIMEOUT_SECONDS:-90}"
 AGNI_RESTORE_BRANCH="${AGNI_RESTORE_BRANCH:-1}"
+AGNI_ENFORCE_CLEAN_LOCAL="${AGNI_ENFORCE_CLEAN_LOCAL:-1}"
+AGNI_ENFORCE_CLEAN_REPO="${AGNI_ENFORCE_CLEAN_REPO:-1}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 if [[ "${AGNI_HEALTH_PATH:0:1}" != "/" ]]; then
   AGNI_HEALTH_PATH="/${AGNI_HEALTH_PATH}"
@@ -82,6 +89,12 @@ echo "  container=${AGNI_CONTAINER_NAME}"
 echo "  port=${AGNI_HOST_PORT}->${AGNI_CONTAINER_PORT}"
 echo "  health_path=${AGNI_HEALTH_PATH}"
 echo "  no_build=${NO_BUILD}"
+echo "  enforce_clean_local=${AGNI_ENFORCE_CLEAN_LOCAL}"
+echo "  enforce_clean_repo=${AGNI_ENFORCE_CLEAN_REPO}"
+
+if [[ "${AGNI_ENFORCE_CLEAN_LOCAL}" == "1" ]]; then
+  bash "${SCRIPT_DIR}/require_clean_git.sh" "${REPO_ROOT}"
+fi
 
 ssh "${AGNI_SSH_TARGET}" bash -s -- \
   "${AGNI_REPO_PATH}" \
@@ -96,7 +109,8 @@ ssh "${AGNI_SSH_TARGET}" bash -s -- \
   "${AGNI_ROOT_PATH}" \
   "${AGNI_TIMEOUT_SECONDS}" \
   "${AGNI_RESTORE_BRANCH}" \
-  "${NO_BUILD}" <<'REMOTE'
+  "${NO_BUILD}" \
+  "${AGNI_ENFORCE_CLEAN_REPO}" <<'REMOTE'
 set -euo pipefail
 
 REPO_PATH="$1"
@@ -112,8 +126,17 @@ ROOT_PATH="${10}"
 TIMEOUT_SECONDS="${11}"
 RESTORE_BRANCH="${12}"
 NO_BUILD="${13}"
+ENFORCE_CLEAN_REPO="${14}"
 
 cd "${REPO_PATH}"
+
+if [[ "${ENFORCE_CLEAN_REPO}" == "1" ]] && [[ -n "$(git status --porcelain)" ]]; then
+  echo "ERROR: remote repo is dirty at ${REPO_PATH}" >&2
+  git status --short >&2
+  echo "Run scripts/agni_isolate_workspace.sh --apply before deploy." >&2
+  exit 2
+fi
+
 PREV_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 restore_branch() {
   if [[ "${RESTORE_BRANCH}" == "1" ]] && [[ "${PREV_BRANCH}" != "${TARGET_BRANCH}" ]]; then
