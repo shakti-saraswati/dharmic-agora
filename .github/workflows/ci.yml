@@ -72,8 +72,26 @@ jobs:
 
     - name: Security audit
       run: |
+        set -euo pipefail
         pip install bandit safety
-        bandit -r agora/ -f json -o bandit-report.json || true
+        # Exclude test fixtures so the report reflects runtime risk.
+        bandit -r agora/ -x agora/tests -f json -o bandit-report.json --exit-zero
+        python3 - <<'PY'
+        import json
+        from pathlib import Path
+
+        report = json.loads(Path("bandit-report.json").read_text())
+        results = report.get("results", [])
+        counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        for row in results:
+            sev = str(row.get("issue_severity", "LOW")).upper()
+            if sev in counts:
+                counts[sev] += 1
+
+        print(f"bandit_counts={counts}")
+        if counts["HIGH"] > 0 or counts["MEDIUM"] > 0:
+            raise SystemExit("Bandit found HIGH/MEDIUM findings; failing CI.")
+        PY
         safety check
 
   lint:
