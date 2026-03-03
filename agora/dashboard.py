@@ -322,7 +322,7 @@ if FASTAPI_AVAILABLE:
         return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
-def run_server(host: str = "0.0.0.0", port: int = 8765):
+def run_server(host: str = "127.0.0.1", port: int = 8765):
     """Run the dashboard server."""
     if not FASTAPI_AVAILABLE:
         print("FastAPI not available. Install with: pip install fastapi uvicorn")

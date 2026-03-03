@@ -6,6 +6,7 @@ Tests the complete lifecycle: register → auth → post → moderate → vote �
 import importlib
 import json
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -595,7 +596,8 @@ class TestAdminQueue:
         )
         queue_id = resp.json()["queue_id"]
 
-        monkeypatch.setenv("SAB_SHADOW_SUMMARY_PATH", str(Path("/tmp/does-not-exist-shadow-summary.json")))
+        missing_summary = Path(tempfile.gettempdir()) / "does-not-exist-shadow-summary.json"
+        monkeypatch.setenv("SAB_SHADOW_SUMMARY_PATH", str(missing_summary))
         resp = client.post(
             f"/admin/approve/{queue_id}",
             json={"reason": "diagnostic-only mode"},

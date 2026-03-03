@@ -32,6 +32,7 @@ from typing import Any, Optional, Callable
 import base64
 import threading
 import queue
+import tempfile
 
 
 class CourierChannel(Enum):
@@ -52,6 +53,15 @@ class MessagePriority(Enum):
 
 class SecurityError(Exception):
     """Raised when a security violation is detected."""
+
+
+def _allowed_route_bases() -> list[Path]:
+    """Allowed roots for local courier delivery endpoints."""
+    bases = {Path.home().resolve(), Path(tempfile.gettempdir()).resolve()}
+    tmp_env = os.getenv("TMPDIR")
+    if tmp_env:
+        bases.add(Path(tmp_env).expanduser().resolve())
+    return list(bases)
 
 
 @dataclass
@@ -144,11 +154,7 @@ class DeliveryRoute:
         path = Path(self.endpoint).expanduser().resolve()
         
         # Path traversal protection: ensure path is within allowed base directories
-        allowed_bases = [
-            Path.home().resolve(),
-            Path("/tmp").resolve(),
-            Path("/var/tmp").resolve(),
-        ]
+        allowed_bases = _allowed_route_bases()
         if not any(str(path).startswith(str(base)) for base in allowed_bases):
             raise SecurityError(f"Path traversal attempt blocked: {path}")
         
@@ -165,11 +171,7 @@ class DeliveryRoute:
         shared_dir = Path(self.endpoint).expanduser().resolve()
         
         # Path traversal protection
-        allowed_bases = [
-            Path.home().resolve(),
-            Path("/tmp").resolve(),
-            Path("/var/tmp").resolve(),
-        ]
+        allowed_bases = _allowed_route_bases()
         if not any(str(shared_dir).startswith(str(base)) for base in allowed_bases):
             raise SecurityError(f"Path traversal attempt blocked: {shared_dir}")
         

@@ -1044,23 +1044,29 @@ class ConvergenceStore:
         if not deduped:
             return {}
 
-        placeholders = ",".join("?" for _ in deduped)
         with self._conn() as conn:
             cursor = conn.cursor()
+            cursor.execute("DROP TABLE IF EXISTS temp._agent_filter")
             cursor.execute(
-                f"""
+                "CREATE TEMP TABLE temp._agent_filter (address TEXT PRIMARY KEY)"
+            )
+            cursor.executemany(
+                "INSERT OR IGNORE INTO temp._agent_filter(address) VALUES (?)",
+                [(address,) for address in deduped],
+            )
+            cursor.execute(
+                """
                 SELECT t.*
                 FROM trust_gradients t
                 JOIN (
                     SELECT agent_address, MAX(id) AS max_id
                     FROM trust_gradients
-                    WHERE agent_address IN ({placeholders})
+                    WHERE agent_address IN (SELECT address FROM temp._agent_filter)
                     GROUP BY agent_address
                 ) latest
                 ON latest.agent_address = t.agent_address
                 AND latest.max_id = t.id
-                """,
-                tuple(deduped),
+                """
             )
             rows = cursor.fetchall()
 

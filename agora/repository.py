@@ -68,16 +68,16 @@ def list_posts(
     sort_by: Literal["newest", "karma", "depth"] = "newest",
 ) -> List[Dict]:
     """Return published (non-deleted) posts, sorted."""
-    order_map = {
-        "newest": "created_at DESC",
-        "karma": "karma_score DESC, created_at DESC",
-        "depth": "depth_score DESC, created_at DESC",
+    query_map = {
+        "newest": "SELECT * FROM posts WHERE is_deleted=0 ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        "karma": "SELECT * FROM posts WHERE is_deleted=0 ORDER BY karma_score DESC, created_at DESC LIMIT ? OFFSET ?",
+        "depth": "SELECT * FROM posts WHERE is_deleted=0 ORDER BY depth_score DESC, created_at DESC LIMIT ? OFFSET ?",
     }
-    order = order_map.get(sort_by, order_map["newest"])
+    query = query_map.get(sort_by, query_map["newest"])
     conn = _connect(db_path)
     try:
         rows = conn.execute(
-            f"SELECT * FROM posts WHERE is_deleted=0 ORDER BY {order} LIMIT ? OFFSET ?",
+            query,
             (limit, offset),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -199,8 +199,27 @@ def upsert_vote(
     table = "posts" if content_type == "post" else "comments"
     conn = _connect(db_path)
     try:
+        if table == "posts":
+            exists_sql = "SELECT id FROM posts WHERE id=? AND is_deleted=0"
+            update_sql = """
+                UPDATE posts
+                SET karma_score=karma_score+?,
+                    vote_count=(SELECT COUNT(*) FROM votes WHERE content_type=? AND content_id=?)
+                WHERE id=?
+            """
+            karma_sql = "SELECT karma_score FROM posts WHERE id=?"
+        else:
+            exists_sql = "SELECT id FROM comments WHERE id=? AND is_deleted=0"
+            update_sql = """
+                UPDATE comments
+                SET karma_score=karma_score+?,
+                    vote_count=(SELECT COUNT(*) FROM votes WHERE content_type=? AND content_id=?)
+                WHERE id=?
+            """
+            karma_sql = "SELECT karma_score FROM comments WHERE id=?"
+
         row = conn.execute(
-            f"SELECT id FROM {table} WHERE id=? AND is_deleted=0",
+            exists_sql,
             (content_id,),
         ).fetchone()
         if not row:
@@ -230,17 +249,9 @@ def upsert_vote(
             )
             karma_delta = vote_value
 
-        conn.execute(
-            f"""
-            UPDATE {table}
-            SET karma_score=karma_score+?,
-                vote_count=(SELECT COUNT(*) FROM votes WHERE content_type=? AND content_id=?)
-            WHERE id=?
-            """,
-            (karma_delta, content_type, content_id, content_id),
-        )
+        conn.execute(update_sql, (karma_delta, content_type, content_id, content_id))
         new_karma_row = conn.execute(
-            f"SELECT karma_score FROM {table} WHERE id=?",
+            karma_sql,
             (content_id,),
         ).fetchone()
         conn.commit()
