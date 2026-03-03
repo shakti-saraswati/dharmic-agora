@@ -68,15 +68,26 @@ TOKEN_NAME_PATTERN = re.compile(r"^[A-Za-z0-9-]{3,30}$")
 TOKEN_HASHER = CryptContext(schemes=["bcrypt"], deprecated="auto") if CryptContext else None
 
 
+def _sha256_simple_token_secret(token: str) -> str:
+    """Return a deterministic sha256 token hash with explicit scheme marker."""
+    return f"sha256${hashlib.sha256(token.encode()).hexdigest()}"
+
+
 def _hash_simple_token_secret(token: str) -> str:
     """Hash a simple token secret (bcrypt preferred, sha256 fallback)."""
+    global TOKEN_HASHER
     if TOKEN_HASHER is not None:
-        return TOKEN_HASHER.hash(token)
-    return f"sha256${hashlib.sha256(token.encode()).hexdigest()}"
+        try:
+            return TOKEN_HASHER.hash(token)
+        except Exception:
+            # Some bcrypt/passlib combos fail at runtime; keep token issuance available.
+            TOKEN_HASHER = None
+    return _sha256_simple_token_secret(token)
 
 
 def _verify_simple_token_secret(token: str, stored_hash: str) -> bool:
     """Verify simple token secret against bcrypt/sha256 hash formats."""
+    global TOKEN_HASHER
     if not stored_hash:
         return False
 
@@ -86,6 +97,7 @@ def _verify_simple_token_secret(token: str, stored_hash: str) -> bool:
         try:
             return bool(TOKEN_HASHER.verify(token, stored_hash))
         except Exception:
+            TOKEN_HASHER = None
             return False
 
     if stored_hash.startswith("sha256$"):
