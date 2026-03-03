@@ -13,6 +13,7 @@ Run: uvicorn agora.api_server:app --reload
 import hashlib
 import hmac
 import json
+import logging
 import math
 import os
 import sqlite3
@@ -69,6 +70,7 @@ PROMOTION_REQUIREMENTS = {
     "gate_passed_syntheses": 1,
 }
 VERIFIED_CONTRIBUTOR_TIER = "verified_contributor"
+LOGGER = logging.getLogger(__name__)
 
 # =============================================================================
 # DATABASE SETUP
@@ -1218,16 +1220,16 @@ app.add_middleware(
 try:
     from agora.witness_explorer import router as explorer_router
     app.include_router(explorer_router)
-except Exception:
+except Exception as exc:
     # Explorer is non-critical; API should still boot if templates/deps are missing.
-    pass
+    LOGGER.warning("Skipping explorer router registration: %s", exc)
 
 # Optional federation API (mounted at /api/federation)
 try:
     app.include_router(federation_router)
-except Exception:
+except Exception as exc:
     # Federation is optional for local/dev runtimes.
-    pass
+    LOGGER.warning("Skipping federation router registration: %s", exc)
 
 
 # =============================================================================
@@ -2447,8 +2449,8 @@ async def witness_entries(
         if isinstance(e.get("details"), str):
             try:
                 e["details"] = json.loads(e["details"])
-            except Exception:
-                pass
+            except json.JSONDecodeError:
+                continue
     return entries
 
 

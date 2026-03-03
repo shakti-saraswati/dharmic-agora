@@ -11,7 +11,8 @@ import hashlib
 import json
 import shlex
 import sqlite3
-import subprocess
+# Controlled subprocess execution for local validation commands (shell disabled).
+import subprocess  # nosec B404
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,7 +58,8 @@ class ConvergenceStore:
         "replay_penalty": -0.12,
         "cross_agent_replay_penalty": -0.18,
         "collusion_penalty": -0.08,
-        "outcome_pass_bonus": 0.05,
+        # Numeric policy coefficient, not a credential value.
+        "outcome_pass_bonus": 0.05,  # nosec B105
         "outcome_fail_penalty": -0.10,
         "human_acceptance_bonus": 0.08,
         "max_adjustment_abs": 0.60,
@@ -1447,7 +1449,8 @@ class ConvergenceStore:
                 )
                 ok = False
                 break
-            proc = subprocess.run(
+            # Command is parsed into argv and executed without a shell.
+            proc = subprocess.run(  # nosec B603
                 argv,
                 cwd=str(cwd),
                 check=False,

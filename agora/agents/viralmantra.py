@@ -160,8 +160,8 @@ class ResonanceCalculator:
                 ref_time = datetime.fromisoformat(ref.get("timestamp", meme.created_at))
                 age_hours = (now - ref_time).total_seconds() / 3600
                 freshness_score += max(0, 10 - age_hours / 24)  # Decay over days
-            except:
-                pass
+            except (TypeError, ValueError):
+                continue
         
         # Reach: unique agents who referenced
         unique_agents = len(set(ref.get("agent", "unknown") for ref in meme.references))

@@ -10,7 +10,8 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-import subprocess
+# Required to invoke constrained docker runtime.
+import subprocess  # nosec B404
 import tempfile
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -67,7 +68,10 @@ def run_in_sandbox(code: str, image: str) -> SandboxResult:
         cmd += ["-v", f"{tmp}:/work", "-w", "/work", image, "python", "sandbox.py"]
 
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            # Fixed docker argv using an allowlisted image.
+            proc = subprocess.run(  # nosec B603
+                cmd, capture_output=True, text=True, timeout=timeout
+            )
             return SandboxResult(
                 allowed=True,
                 stdout=proc.stdout,

@@ -24,8 +24,9 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
-FEDERATION_SHARED_SECRET_ENV = "SAB_FEDERATION_SHARED_SECRET"
-FEDERATION_SHARED_SECRET_HEADER = "X-SAB-Federation-Secret"
+# Names of env/header fields, not embedded credentials.
+FEDERATION_SHARED_SECRET_ENV = "SAB_FEDERATION_SHARED_SECRET"  # nosec B105
+FEDERATION_SHARED_SECRET_HEADER = "X-SAB-Federation-Secret"  # nosec B105
 FEDERATION_DATA_DIR_ENV = "SAB_FEDERATION_DATA_DIR"
 _DATA_LOCK = RLock()
 
