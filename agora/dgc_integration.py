@@ -20,7 +20,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 
 class SecurityStatus(Enum):
-    PASS = "pass"
+    # Status string label, not a credential.
+    PASS = "pass"  # nosec B105
     FAIL = "fail"
     WARNING = "warning"
     SKIP = "skip"

@@ -14,6 +14,7 @@ This is the living proof that this isn't vaporware.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +43,9 @@ except ImportError:
         from agents.subagent_runner import get_runner
     except ImportError:
         get_runner = None
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class DashboardData:
@@ -94,8 +98,9 @@ class DashboardData:
         for f in python_files:
             try:
                 total_lines += len(f.read_text().splitlines())
-            except:
-                pass
+            except (OSError, UnicodeDecodeError) as exc:
+                LOGGER.debug("Skipping unreadable file %s: %s", f, exc)
+                continue
         
         return {
             "python_files": len(python_files),
