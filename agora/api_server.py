@@ -79,7 +79,17 @@ def init_database():
     conn = sqlite3.connect(AGORA_DB)
     cursor = conn.cursor()
 
+    import re as _re_mod
+    _SAFE_ID = _re_mod.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+
+    def _assert_safe_sql_identifier(name: str) -> str:
+        if not _SAFE_ID.fullmatch(name):
+            raise ValueError(f"Unsafe SQL identifier: {name!r}")
+        return name
+
     def ensure_column(table: str, column_name: str, column_def: str) -> None:
+        _assert_safe_sql_identifier(table)
+        _assert_safe_sql_identifier(column_name)
         cursor.execute(f"PRAGMA table_info({table})")
         existing = {row[1] for row in cursor.fetchall()}
         if column_name not in existing:
@@ -1998,7 +2008,34 @@ async def admin_appeal(
     req: ReasonRequest,
     agent: dict = Depends(get_current_agent),
 ):
-    """Appeal a rejected moderation decision (authenticated user)."""
+    """Appeal a rejected moderation decision.
+
+    Only the original content author or an admin may appeal.
+    """
+    conn = sqlite3.connect(AGORA_DB)
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT author_address FROM moderation_queue WHERE id = ?",
+            (queue_id,),
+        )
+        row = cursor.fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Queue item not found")
+
+    is_admin = (
+        agent.get("auth_method") == "ed25519" and _auth.is_admin(agent["address"])
+    )
+    if row["author_address"] != agent["address"] and not is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the content author or an admin may appeal",
+        )
+
     try:
         updated = _moderation.appeal(queue_id, requester_address=agent["address"], reason=req.reason)
     except ValueError as e:

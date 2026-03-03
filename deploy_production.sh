@@ -40,4 +40,4 @@ HOST="${HOST:-0.0.0.0}"
 echo "Starting dharmic-agora on ${HOST}:${PORT} (ENV=${ENV:-unset})"
 
 # NOTE: TLS is typically terminated at nginx/caddy. ENFORCE_HTTPS should be used behind a proxy.
-exec uvicorn agora.api_server:app --host "$HOST" --port "$PORT"
+exec uvicorn agora.app:app --host "$HOST" --port "$PORT"
