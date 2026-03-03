@@ -736,25 +736,33 @@ def _web_feed_items(
     sort_mode: str,
     limit: int,
 ) -> List[Dict[str, Any]]:
-    where = ""
-    params: List[Any] = []
-    if status_filter != "all":
-        where = "WHERE s.status = ?"
-        params.append(status_filter)
-
-    rows = conn.execute(
-        f"""
-        SELECT
-            s.*,
-            (SELECT COUNT(*) FROM spark_challenges c WHERE c.spark_id = s.id) AS challenge_count,
-            (SELECT COUNT(*) FROM witness_chain w WHERE w.spark_id = s.id) AS witness_count
-        FROM sparks s
-        {where}
-        ORDER BY s.created_at DESC
-        LIMIT ?
-        """,
-        (*params, limit),
-    ).fetchall()
+    if status_filter == "all":
+        rows = conn.execute(
+            """
+            SELECT
+                s.*,
+                (SELECT COUNT(*) FROM spark_challenges c WHERE c.spark_id = s.id) AS challenge_count,
+                (SELECT COUNT(*) FROM witness_chain w WHERE w.spark_id = s.id) AS witness_count
+            FROM sparks s
+            ORDER BY s.created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT
+                s.*,
+                (SELECT COUNT(*) FROM spark_challenges c WHERE c.spark_id = s.id) AS challenge_count,
+                (SELECT COUNT(*) FROM witness_chain w WHERE w.spark_id = s.id) AS witness_count
+            FROM sparks s
+            WHERE s.status = ?
+            ORDER BY s.created_at DESC
+            LIMIT ?
+            """,
+            (status_filter, limit),
+        ).fetchall()
     items: List[Dict[str, Any]] = []
     for row in rows:
         item = _serialize_spark_row(row)

@@ -6,6 +6,7 @@ FastAPI server that wires auth → gates → API → witness explorer.
 
 import hashlib
 import json
+import os
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -674,4 +675,6 @@ async def get_status():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    host = os.getenv("SAB_HOST", "127.0.0.1")
+    port = int(os.getenv("SAB_PORT", "8000"))
+    uvicorn.run(app, host=host, port=port)

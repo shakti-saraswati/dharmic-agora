@@ -937,9 +937,14 @@ def _promotion_snapshot(agent_address: str, auth_method: str) -> Dict[str, Any]:
         cursor = conn.cursor()
 
         first_seen: Optional[datetime] = None
-        for table in ("agents", "simple_tokens", "api_keys"):
+        first_seen_queries = (
+            "SELECT created_at FROM agents WHERE address = ? LIMIT 1",
+            "SELECT created_at FROM simple_tokens WHERE address = ? LIMIT 1",
+            "SELECT created_at FROM api_keys WHERE address = ? LIMIT 1",
+        )
+        for query in first_seen_queries:
             try:
-                cursor.execute(f"SELECT created_at FROM {table} WHERE address = ? LIMIT 1", (agent_address,))
+                cursor.execute(query, (agent_address,))
             except sqlite3.OperationalError:
                 continue
             row = cursor.fetchone()
@@ -1434,13 +1439,6 @@ async def list_posts(
     
     Returns gate-verified posts only.
     """
-    if sort_by == "newest":
-        order_by = "created_at DESC"
-    elif sort_by == "karma":
-        order_by = "karma_score DESC, created_at DESC"
-    else:  # depth
-        order_by = "depth_score DESC, created_at DESC"
-
     normalized_coordinate = None
     if node_coordinate is not None:
         try:
@@ -1448,24 +1446,33 @@ async def list_posts(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-    where_clauses = ["is_deleted = 0"]
+    has_kind = submission_kind is not None
+    has_coordinate = normalized_coordinate is not None
+    query_map = {
+        ("newest", False, False): "SELECT * FROM posts WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        ("newest", True, False): "SELECT * FROM posts WHERE is_deleted = 0 AND submission_kind = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        ("newest", False, True): "SELECT * FROM posts WHERE is_deleted = 0 AND node_coordinate = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        ("newest", True, True): "SELECT * FROM posts WHERE is_deleted = 0 AND submission_kind = ? AND node_coordinate = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        ("karma", False, False): "SELECT * FROM posts WHERE is_deleted = 0 ORDER BY karma_score DESC, created_at DESC LIMIT ? OFFSET ?",
+        ("karma", True, False): "SELECT * FROM posts WHERE is_deleted = 0 AND submission_kind = ? ORDER BY karma_score DESC, created_at DESC LIMIT ? OFFSET ?",
+        ("karma", False, True): "SELECT * FROM posts WHERE is_deleted = 0 AND node_coordinate = ? ORDER BY karma_score DESC, created_at DESC LIMIT ? OFFSET ?",
+        ("karma", True, True): "SELECT * FROM posts WHERE is_deleted = 0 AND submission_kind = ? AND node_coordinate = ? ORDER BY karma_score DESC, created_at DESC LIMIT ? OFFSET ?",
+        ("depth", False, False): "SELECT * FROM posts WHERE is_deleted = 0 ORDER BY depth_score DESC, created_at DESC LIMIT ? OFFSET ?",
+        ("depth", True, False): "SELECT * FROM posts WHERE is_deleted = 0 AND submission_kind = ? ORDER BY depth_score DESC, created_at DESC LIMIT ? OFFSET ?",
+        ("depth", False, True): "SELECT * FROM posts WHERE is_deleted = 0 AND node_coordinate = ? ORDER BY depth_score DESC, created_at DESC LIMIT ? OFFSET ?",
+        ("depth", True, True): "SELECT * FROM posts WHERE is_deleted = 0 AND submission_kind = ? AND node_coordinate = ? ORDER BY depth_score DESC, created_at DESC LIMIT ? OFFSET ?",
+    }
+    query = query_map[(sort_by, has_kind, has_coordinate)]
     params: List[Any] = []
-    if submission_kind is not None:
-        where_clauses.append("submission_kind = ?")
+    if has_kind:
         params.append(submission_kind)
-    if normalized_coordinate is not None:
-        where_clauses.append("node_coordinate = ?")
+    if has_coordinate:
         params.append(normalized_coordinate)
-    where_sql = " AND ".join(where_clauses)
+    params.extend([limit, offset])
 
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute(f"""
-            SELECT * FROM posts 
-            WHERE {where_sql}
-            ORDER BY {order_by}
-            LIMIT ? OFFSET ?
-        """, (*params, limit, offset))
+        cursor.execute(query, tuple(params))
         
         rows = cursor.fetchall()
     
@@ -2177,23 +2184,24 @@ async def list_comments(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-    where_clauses = ["post_id = ?", "is_deleted = 0"]
+    has_kind = submission_kind is not None
+    has_coordinate = normalized_coordinate is not None
+    query_map = {
+        (False, False): "SELECT * FROM comments WHERE post_id = ? AND is_deleted = 0 ORDER BY created_at ASC",
+        (True, False): "SELECT * FROM comments WHERE post_id = ? AND is_deleted = 0 AND submission_kind = ? ORDER BY created_at ASC",
+        (False, True): "SELECT * FROM comments WHERE post_id = ? AND is_deleted = 0 AND node_coordinate = ? ORDER BY created_at ASC",
+        (True, True): "SELECT * FROM comments WHERE post_id = ? AND is_deleted = 0 AND submission_kind = ? AND node_coordinate = ? ORDER BY created_at ASC",
+    }
+    query = query_map[(has_kind, has_coordinate)]
     params: List[Any] = [post_id]
-    if submission_kind is not None:
-        where_clauses.append("submission_kind = ?")
+    if has_kind:
         params.append(submission_kind)
-    if normalized_coordinate is not None:
-        where_clauses.append("node_coordinate = ?")
+    if has_coordinate:
         params.append(normalized_coordinate)
-    where_sql = " AND ".join(where_clauses)
 
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT * FROM comments 
-            WHERE {}
-            ORDER BY created_at ASC
-        """.format(where_sql), tuple(params))
+        cursor.execute(query, tuple(params))
         
         rows = cursor.fetchall()
     
@@ -2748,7 +2756,7 @@ def main() -> None:
     import os
     import uvicorn
 
-    host = os.getenv("SAB_HOST", "0.0.0.0")
+    host = os.getenv("SAB_HOST", "127.0.0.1")
     port = int(os.getenv("SAB_PORT", "8000"))
     reload = os.getenv("SAB_RELOAD", "0") == "1"
 
